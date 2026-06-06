@@ -41,15 +41,15 @@ BraceWrapping:
   IndentBraces:    false
 
 # ==============================================================
-# 3. 短语句 — 允许简洁单行
+# 3. 短语句 — 强制换行，禁用单行
 # ==============================================================
-AllowShortBlocksOnASingleLine: true    # if (x) { return; }
-AllowShortCaseLabelsOnASingleLine: true
-AllowShortFunctionsOnASingleLine: Inline  # 仅 inline 函数可单行
-AllowShortIfStatementsOnASingleLine: WithoutElse
-AllowShortLoopsOnASingleLine: true     # for (;;) { single; }
-AllowShortEnumsOnASingleLine: true
-AllowShortLambdasOnASingleLine: All
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+AllowShortLambdasOnASingleLine: None
 
 # ==============================================================
 # 4. 每行字符数

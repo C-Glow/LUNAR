@@ -14,17 +14,17 @@
 /*============================================================================
  * BSP 句柄
  *============================================================================*/
-static bsp_key_t *s_key_handle = NULL;
+static bsp_key_t* s_key_handle = NULL;
 
 /*============================================================================
  * 键盘硬件配置
  *============================================================================*/
 static const bsp_key_row_t key_rows[] = {
     {GPIO_PIN_9, {GPIO_PIN_8, GPIO_PIN_3, GPIO_PIN_5, GPIO_PIN_4, GPIO_PIN_15}, {1, 2, 3, 4, 5}},
-    {GPIO_PIN_8, {GPIO_PIN_3, GPIO_PIN_5, GPIO_PIN_4, GPIO_PIN_15, 0},          {6, 7, 8, 9, 0}},
-    {GPIO_PIN_3, {GPIO_PIN_5, GPIO_PIN_4, GPIO_PIN_15, 0, 0},                    {12, 10, 11, 0, 0}},
-    {GPIO_PIN_5, {GPIO_PIN_4, GPIO_PIN_15, 0, 0, 0},                             {14, 13, 0, 0, 0}},
-    {GPIO_PIN_4, {GPIO_PIN_15, 0, 0, 0, 0},                                      {15, 0, 0, 0, 0}},
+    {GPIO_PIN_8, {GPIO_PIN_3, GPIO_PIN_5, GPIO_PIN_4, GPIO_PIN_15, 0}, {6, 7, 8, 9, 0}},
+    {GPIO_PIN_3, {GPIO_PIN_5, GPIO_PIN_4, GPIO_PIN_15, 0, 0}, {12, 10, 11, 0, 0}},
+    {GPIO_PIN_5, {GPIO_PIN_4, GPIO_PIN_15, 0, 0, 0}, {14, 13, 0, 0, 0}},
+    {GPIO_PIN_4, {GPIO_PIN_15, 0, 0, 0, 0}, {15, 0, 0, 0, 0}},
 };
 
 static const bsp_key_power_pin_t power_pin = {
@@ -36,14 +36,14 @@ static const bsp_key_power_pin_t power_pin = {
 /*============================================================================
  * 扫描状态
  *============================================================================*/
-static uint8_t  s_key_before  = 0;
-static uint8_t  s_key_state   = 0;
+static uint8_t s_key_before   = 0;
+static uint8_t s_key_state    = 0;
 static uint16_t s_key_counter = 0;
 
 /*============================================================================
  * 按键扫描任务
  *============================================================================*/
-static void key_scan_task(void *arg) {
+static void key_scan_task(void* arg) {
     (void)arg;
     uint32_t period_ticks = CMSIS_TICKS(KEY_SCAN_INTERVAL_MS);
     uint32_t last         = osKernelGetTickCount();

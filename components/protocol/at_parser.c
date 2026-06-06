@@ -32,7 +32,9 @@ static const at_cmd_entry_t at_cmd_table[] = {
 at_parse_result_t at_parse_frame(const uint8_t* data, uint16_t len) {
     at_parse_result_t result = {AT_CMD_NONE, (const char*)data, len};
 
-    if (!data || len < 4) return result;
+    if (!data || len < 4) {
+        return result;
+    }
 
     /* 查表匹配 */
     for (uint8_t i = 0; i < AT_CMD_TABLE_SIZE; i++) {
@@ -58,10 +60,14 @@ at_parse_result_t at_parse_frame(const uint8_t* data, uint16_t len) {
  *============================================================================*/
 
 void decode_at_command(uint8_t* data, size_t len) {
-    if (!data || len < 2) return;
+    if (!data || len < 2) {
+        return;
+    }
 
     /* 验证 \r\n 结尾 */
-    if (data[len - 2] != '\r' || data[len - 1] != '\n') return;
+    if (data[len - 2] != '\r' || data[len - 1] != '\n') {
+        return;
+    }
 
     /* 去掉 \r\n，解析内容 */
     at_parse_result_t result = at_parse_frame(data, (uint16_t)(len - 2));
@@ -75,8 +81,13 @@ void decode_at_command(uint8_t* data, size_t len) {
         bsp_led_set_mode(g_led, BSP_LED_MUSIC, BSP_LED_MODE_ON, 0);
         bsp_led_set_mode(g_led, BSP_LED_BT, BSP_LED_MODE_OFF, 0);
         break;
-    case AT_CMD_TS_BLINK: bsp_led_set_mode(g_led, BSP_LED_BT, BSP_LED_MODE_BLINK, 500); break;
-    case AT_CMD_TS_ON: bsp_led_set_mode(g_led, BSP_LED_BT, BSP_LED_MODE_ON, 0); break;
-    default: break;
+    case AT_CMD_TS_BLINK:
+        bsp_led_set_mode(g_led, BSP_LED_BT, BSP_LED_MODE_BLINK, 500);
+        break;
+    case AT_CMD_TS_ON:
+        bsp_led_set_mode(g_led, BSP_LED_BT, BSP_LED_MODE_ON, 0);
+        break;
+    default:
+        break;
     }
 }

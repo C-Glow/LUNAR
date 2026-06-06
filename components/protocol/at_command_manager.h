@@ -80,7 +80,7 @@ typedef struct {
 typedef struct {
     osMessageQueueId_t request_queue;
     osMessageQueueId_t response_queue;
-    osMutexId_t        mutex;
+    osMutexId_t mutex;
 
     at_cmd_registration_t registrations[AT_CMD_MAX];
     uint8_t reg_count;

@@ -50,13 +50,21 @@ static uint32_t pwm_get_timer_clk(TIM_TypeDef* tim) {
  *============================================================================*/
 
 bsp_status_t bsp_pwm_init(bsp_pwm_t** handle, const bsp_pwm_config_t* config) {
-    if (!handle || !config || !config->htim) return BSP_ERR_PARAM;
-    if (config->resolution == 0 || config->freq_hz == 0) return BSP_ERR_PARAM;
-    if (*handle || s_inited) return BSP_ERR_BUSY;
+    if (!handle || !config || !config->htim) {
+        return BSP_ERR_PARAM;
+    }
+    if (config->resolution == 0 || config->freq_hz == 0) {
+        return BSP_ERR_PARAM;
+    }
+    if (*handle || s_inited) {
+        return BSP_ERR_BUSY;
+    }
 
     uint32_t tim_clk = pwm_get_timer_clk(config->htim->Instance);
     uint32_t ticks   = tim_clk / config->freq_hz;
-    if (ticks < config->resolution) return BSP_ERROR;
+    if (ticks < config->resolution) {
+        return BSP_ERROR;
+    }
 
     uint32_t prescaler = (ticks / config->resolution) - 1;
     uint32_t period    = config->resolution - 1;
@@ -67,7 +75,9 @@ bsp_status_t bsp_pwm_init(bsp_pwm_t** handle, const bsp_pwm_config_t* config) {
     config->htim->Init.ClockDivision     = TIM_CLOCKDIVISION_DIV1;
     config->htim->Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
 
-    if (HAL_TIM_PWM_Init(config->htim) != HAL_OK) return BSP_ERR_HW;
+    if (HAL_TIM_PWM_Init(config->htim) != HAL_OK) {
+        return BSP_ERR_HW;
+    }
 
     TIM_OC_InitTypeDef oc = {0};
     oc.OCMode             = TIM_OCMODE_PWM1;
@@ -93,8 +103,12 @@ bsp_status_t bsp_pwm_init(bsp_pwm_t** handle, const bsp_pwm_config_t* config) {
 }
 
 void bsp_pwm_deinit(bsp_pwm_t** handle) {
-    if (!handle || !*handle) return;
-    if (!s_inited) return;
+    if (!handle || !*handle) {
+        return;
+    }
+    if (!s_inited) {
+        return;
+    }
 
     if (s_instance.initialized && s_instance.htim) {
         HAL_TIM_PWM_Stop(s_instance.htim, s_instance.channel);
@@ -107,23 +121,33 @@ void bsp_pwm_deinit(bsp_pwm_t** handle) {
 }
 
 bsp_status_t bsp_pwm_set_duty(bsp_pwm_t* handle, uint32_t duty) {
-    if (!handle || !s_inited) return BSP_ERR_NOTINIT;
-    if (duty >= s_instance.resolution) duty = s_instance.resolution - 1;
+    if (!handle || !s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
+    if (duty >= s_instance.resolution) {
+        duty = s_instance.resolution - 1;
+    }
     __HAL_TIM_SET_COMPARE(s_instance.htim, s_instance.channel, duty);
     return BSP_OK;
 }
 
 bsp_status_t bsp_pwm_start(bsp_pwm_t* handle) {
-    if (!handle || !s_inited) return BSP_ERR_NOTINIT;
+    if (!handle || !s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
     return (HAL_TIM_PWM_Start(s_instance.htim, s_instance.channel) == HAL_OK) ? BSP_OK : BSP_ERR_HW;
 }
 
 bsp_status_t bsp_pwm_stop(bsp_pwm_t* handle) {
-    if (!handle || !s_inited) return BSP_ERR_NOTINIT;
+    if (!handle || !s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
     return (HAL_TIM_PWM_Stop(s_instance.htim, s_instance.channel) == HAL_OK) ? BSP_OK : BSP_ERR_HW;
 }
 
 uint32_t bsp_pwm_get_resolution(bsp_pwm_t* handle) {
-    if (!handle || !s_inited) return 0;
+    if (!handle || !s_inited) {
+        return 0;
+    }
     return s_instance.resolution;
 }

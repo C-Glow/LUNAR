@@ -33,8 +33,12 @@ static void led_hw_write(uint8_t i, bool on) {
 }
 
 bsp_status_t bsp_led_init(bsp_led_t** handle, const bsp_led_config_t* config) {
-    if (!handle || !config || !config->hw_table || config->count == 0) return BSP_ERR_PARAM;
-    if (*handle || s_inited) return BSP_ERR_BUSY;
+    if (!handle || !config || !config->hw_table || config->count == 0) {
+        return BSP_ERR_PARAM;
+    }
+    if (*handle || s_inited) {
+        return BSP_ERR_BUSY;
+    }
 
     for (uint8_t i = 0; i < config->count && i < BSP_LED_COUNT; i++) {
         s_inst.leds[i].hw          = config->hw_table[i];
@@ -51,26 +55,36 @@ bsp_status_t bsp_led_init(bsp_led_t** handle, const bsp_led_config_t* config) {
 }
 
 void bsp_led_deinit(bsp_led_t** handle) {
-    if (!handle || !*handle || !s_inited) return;
-    for (uint8_t i = 0; i < BSP_LED_COUNT; i++) led_hw_write(i, false);
+    if (!handle || !*handle || !s_inited) {
+        return;
+    }
+    for (uint8_t i = 0; i < BSP_LED_COUNT; i++) {
+        led_hw_write(i, false);
+    }
     s_inst.initialized = false;
     s_inited           = false;
     *handle            = NULL;
 }
 
 bsp_status_t bsp_led_set_mode(bsp_led_t* handle, uint8_t index, bsp_led_mode_t mode, uint32_t interval_ms) {
-    if (!handle || !s_inited || index >= BSP_LED_COUNT) return BSP_ERR_NOTINIT;
+    if (!handle || !s_inited || index >= BSP_LED_COUNT) {
+        return BSP_ERR_NOTINIT;
+    }
 
     s_inst.leds[index].mode    = mode;
     s_inst.leds[index].elapsed = 0;
 
     switch (mode) {
-    case BSP_LED_MODE_ON: led_hw_write(index, true); break;
+    case BSP_LED_MODE_ON:
+        led_hw_write(index, true);
+        break;
     case BSP_LED_MODE_BLINK:
         s_inst.leds[index].interval_ms = (interval_ms > 0) ? interval_ms : 500;
         led_hw_write(index, true);
         break;
-    default: led_hw_write(index, false); break;
+    default:
+        led_hw_write(index, false);
+        break;
     }
     return BSP_OK;
 }
@@ -80,10 +94,14 @@ bool bsp_led_is_on(bsp_led_t* handle, uint8_t index) {
 }
 
 void bsp_led_poll(bsp_led_t* handle, uint32_t elapsed_ms) {
-    if (!handle || !s_inited || !elapsed_ms) return;
+    if (!handle || !s_inited || !elapsed_ms) {
+        return;
+    }
 
     for (uint8_t i = 0; i < BSP_LED_COUNT; i++) {
-        if (s_inst.leds[i].mode != BSP_LED_MODE_BLINK) continue;
+        if (s_inst.leds[i].mode != BSP_LED_MODE_BLINK) {
+            continue;
+        }
         s_inst.leds[i].elapsed += elapsed_ms;
         if (s_inst.leds[i].elapsed >= s_inst.leds[i].interval_ms) {
             s_inst.leds[i].elapsed -= s_inst.leds[i].interval_ms;

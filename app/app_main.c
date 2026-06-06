@@ -122,29 +122,61 @@ static void on_key_event(EventType event, uint32_t param) {
 
     if (event == EVENT_KEY_SHORT_PRESS) {
         switch (key_id) {
-        case KEY_MUSIC: ble_mode(BT_MODE_MUSIC); break;
-        case KEY_BLUETOOTH: ble_mode(BT_MODE_BT); break;
-        case KEY_PLAY_PAUSE: music_switch(); break;
-        case KEY_PREV: music_prev(); break;
-        case KEY_NEXT: music_next(); break;
-        case KEY_VOL_DOWN: music_volume_control(VOL_DIR_DOWN); break;
-        case KEY_VOL_UP: music_volume_control(VOL_DIR_UP); break;
-        case KEY_HEAT: heat_status_switch(); break;
-        case KEY_HEAT_PLUS: heat_level_down(); break;
-        case KEY_HEAT_MINUS: heat_level_up(); break;
-        case KEY_MIN10: heat_timer_set(10); break;
-        case KEY_MIN30: heat_timer_set(30); break;
-        case KEY_MIN60: heat_timer_set(60); break;
-        default: break;
+        case KEY_MUSIC:
+            ble_mode(BT_MODE_MUSIC);
+            break;
+        case KEY_BLUETOOTH:
+            ble_mode(BT_MODE_BT);
+            break;
+        case KEY_PLAY_PAUSE:
+            music_switch();
+            break;
+        case KEY_PREV:
+            music_prev();
+            break;
+        case KEY_NEXT:
+            music_next();
+            break;
+        case KEY_VOL_DOWN:
+            music_volume_control(VOL_DIR_DOWN);
+            break;
+        case KEY_VOL_UP:
+            music_volume_control(VOL_DIR_UP);
+            break;
+        case KEY_HEAT:
+            heat_status_switch();
+            break;
+        case KEY_HEAT_PLUS:
+            heat_level_down();
+            break;
+        case KEY_HEAT_MINUS:
+            heat_level_up();
+            break;
+        case KEY_MIN10:
+            heat_timer_set(10);
+            break;
+        case KEY_MIN30:
+            heat_timer_set(30);
+            break;
+        case KEY_MIN60:
+            heat_timer_set(60);
+            break;
+        default:
+            break;
         }
     } else if (event == EVENT_KEY_LONG_PRESS) {
         switch (key_id) {
         case KEY_MUSIC:
-        case KEY_BLUETOOTH: ble_mode(BT_MODE_OFF); break;
+        case KEY_BLUETOOTH:
+            ble_mode(BT_MODE_OFF);
+            break;
         case KEY_MIN10:
         case KEY_MIN30:
-        case KEY_MIN60: heat_timer_set(0); break;
-        default: break;
+        case KEY_MIN60:
+            heat_timer_set(0);
+            break;
+        default:
+            break;
         }
     }
 }
@@ -154,22 +186,35 @@ static void on_key_event(EventType event, uint32_t param) {
  *============================================================================*/
 static void on_reg_write(RegisterID reg, uint16_t value) {
     switch (reg) {
-    case REG_HEATING_STATUS: heat_status_set(value ? HEAT_STATUS_RUNNING : HEAT_STATUS_STOP); break;
-    case REG_HEATING_LEVEL: heat_level_set((HeatLevel)value); break;
-    case REG_HEATING_TIMER: heat_timer_set(value); break;
-    case REG_POWER_SWITCH:
-        if (value) event_publish(EVENT_POWER_OFF, 0);
+    case REG_HEATING_STATUS:
+        heat_status_set(value ? HEAT_STATUS_RUNNING : HEAT_STATUS_STOP);
         break;
-    default: break;
+    case REG_HEATING_LEVEL:
+        heat_level_set((HeatLevel)value);
+        break;
+    case REG_HEATING_TIMER:
+        heat_timer_set(value);
+        break;
+    case REG_POWER_SWITCH:
+        if (value) {
+            event_publish(EVENT_POWER_OFF, 0);
+        }
+        break;
+    default:
+        break;
     }
 }
 
 static uint16_t on_reg_read(RegisterID reg) {
     switch (reg) {
-    case REG_HEATING_STATUS: return heat_status_get();
-    case REG_HEATING_LEVEL: return heat_level_get();
-    case REG_HEATING_TIMER: return heat_remain_time_get();
-    default: return register_read(reg);
+    case REG_HEATING_STATUS:
+        return heat_status_get();
+    case REG_HEATING_LEVEL:
+        return heat_level_get();
+    case REG_HEATING_TIMER:
+        return heat_remain_time_get();
+    default:
+        return register_read(reg);
     }
 }
 

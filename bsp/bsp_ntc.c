@@ -82,7 +82,9 @@ bsp_ntc_t* g_ntc_instance = NULL;
 static uint32_t ntc_median(uint32_t buf[], uint8_t n) {
     uint32_t tmp[NTC_FILTER_SAMPLES];
     /* 手工拷贝代替 memcpy（省 ROM） */
-    for (uint8_t i = 0; i < n; i++) tmp[i] = buf[i];
+    for (uint8_t i = 0; i < n; i++) {
+        tmp[i] = buf[i];
+    }
     for (uint8_t i = 0; i < n - 1; i++) {
         bool swapped = false;
         for (uint8_t j = 0; j < n - i - 1; j++) {
@@ -93,7 +95,9 @@ static uint32_t ntc_median(uint32_t buf[], uint8_t n) {
                 swapped    = true;
             }
         }
-        if (!swapped) break;
+        if (!swapped) {
+            break;
+        }
     }
     return tmp[n / 2];
 }
@@ -124,15 +128,25 @@ static uint32_t ntc_moving_avg(uint32_t new_val) {
 
 static float ntc_interpolate(uint32_t adc) {
     static uint8_t last_idx = 0;
-    if (adc >= ntc_adc_table[0]) return -40.0f;
-    if (adc <= ntc_adc_table[NTC_TABLE_SIZE - 1]) return 120.0f;
+    if (adc >= ntc_adc_table[0]) {
+        return -40.0f;
+    }
+    if (adc <= ntc_adc_table[NTC_TABLE_SIZE - 1]) {
+        return 120.0f;
+    }
 
     uint8_t i = last_idx;
     if (adc < ntc_adc_table[i]) {
-        while (i < NTC_TABLE_SIZE - 1 && adc < ntc_adc_table[i + 1]) i++;
+        while (i < NTC_TABLE_SIZE - 1 && adc < ntc_adc_table[i + 1]) {
+            i++;
+        }
     } else if (adc > ntc_adc_table[i]) {
-        while (i > 0 && adc > ntc_adc_table[i - 1]) i--;
-        if (i > 0) i--;
+        while (i > 0 && adc > ntc_adc_table[i - 1]) {
+            i--;
+        }
+        if (i > 0) {
+            i--;
+        }
     }
     last_idx = i;
 
@@ -180,7 +194,9 @@ static bool ntc_detect_fault(uint32_t adc_val) {
 
 #if NTC_USE_DMA && USE_DOUBLE_BUFFER
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
-    if (!g_ntc_instance || hadc->Instance != ADC1) return;
+    if (!g_ntc_instance || hadc->Instance != ADC1) {
+        return;
+    }
     g_ntc_instance->active_buf ^= 1;
     g_ntc_instance->data_ready = 1;
     HAL_ADC_Stop_DMA(hadc);
@@ -188,7 +204,9 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
 }
 
 static int ntc_dma_extract(uint32_t* dest, uint8_t n) {
-    if (!s_inst.data_ready) return -1;
+    if (!s_inst.data_ready) {
+        return -1;
+    }
     uint8_t ready_buf = s_inst.active_buf ^ 1;
     __disable_irq();
     for (uint8_t i = 0; i < n; i++) {
@@ -202,7 +220,8 @@ static int ntc_dma_extract(uint32_t* dest, uint8_t n) {
 static int ntc_dma_extract(uint32_t* dest, uint8_t n) {
     __disable_irq();
     HAL_ADC_Stop_DMA(s_inst.hadc);
-    for (uint8_t i = 0; i < n; i++) dest[i] = s_inst.dma_buf[(ADC_DMA_BUF_SIZE - n + i) % ADC_DMA_BUF_SIZE];
+    for (uint8_t i = 0; i < n; i++)
+        dest[i] = s_inst.dma_buf[(ADC_DMA_BUF_SIZE - n + i) % ADC_DMA_BUF_SIZE];
     HAL_ADC_Start_DMA(s_inst.hadc, s_inst.dma_buf, ADC_DMA_BUF_SIZE);
     __enable_irq();
     return 0;
@@ -237,12 +256,18 @@ static int ntc_sample(uint32_t* adc_out) {
  *============================================================================*/
 
 bsp_status_t bsp_ntc_init(bsp_ntc_t** handle, const bsp_ntc_config_t* config) {
-    if (!handle || !config || !config->hadc) return BSP_ERR_PARAM;
-    if (*handle || s_inited) return BSP_ERR_BUSY;
+    if (!handle || !config || !config->hadc) {
+        return BSP_ERR_PARAM;
+    }
+    if (*handle || s_inited) {
+        return BSP_ERR_BUSY;
+    }
 
     s_inst.hadc        = config->hadc;
     s_inst.temp_offset = config->temp_offset;
-    for (uint8_t i = 0; i < NTC_MOVING_AVG_LEN; i++) s_inst.adc_moving_buf[i] = ADC_MAX_VALUE / 2;
+    for (uint8_t i = 0; i < NTC_MOVING_AVG_LEN; i++) {
+        s_inst.adc_moving_buf[i] = ADC_MAX_VALUE / 2;
+    }
     s_inst.moving_sum         = (ADC_MAX_VALUE / 2) * NTC_MOVING_AVG_LEN;
     s_inst.moving_idx         = 0;
     s_inst.last_filtered_temp = 25.0f;
@@ -252,14 +277,18 @@ bsp_status_t bsp_ntc_init(bsp_ntc_t** handle, const bsp_ntc_config_t* config) {
 
 #if NTC_USE_DMA
 #if USE_DOUBLE_BUFFER
-    for (uint8_t i = 0; i < 2; i++)
-        for (uint8_t j = 0; j < ADC_DMA_BUF_SIZE; j++) s_inst.dma_buf[i][j] = ADC_MAX_VALUE / 2;
+    for (uint8_t i = 0; i < 2; i++) {
+        for (uint8_t j = 0; j < ADC_DMA_BUF_SIZE; j++) {
+            s_inst.dma_buf[i][j] = ADC_MAX_VALUE / 2;
+        }
+    }
     s_inst.active_buf = 0;
     s_inst.data_ready = 0;
     g_ntc_instance    = &s_inst;
     HAL_ADC_Start_DMA(s_inst.hadc, (uint32_t*)s_inst.dma_buf[0], ADC_DMA_BUF_SIZE);
 #else
-    for (uint8_t i = 0; i < ADC_DMA_BUF_SIZE; i++) s_inst.dma_buf[i] = ADC_MAX_VALUE / 2;
+    for (uint8_t i = 0; i < ADC_DMA_BUF_SIZE; i++)
+        s_inst.dma_buf[i] = ADC_MAX_VALUE / 2;
     HAL_ADC_Start_DMA(s_inst.hadc, s_inst.dma_buf, ADC_DMA_BUF_SIZE);
 #endif
 #endif
@@ -271,11 +300,15 @@ bsp_status_t bsp_ntc_init(bsp_ntc_t** handle, const bsp_ntc_config_t* config) {
 }
 
 void bsp_ntc_deinit(bsp_ntc_t** handle) {
-    if (!handle || !*handle || !s_inited) return;
+    if (!handle || !*handle || !s_inited) {
+        return;
+    }
 #if NTC_USE_DMA
     HAL_ADC_Stop_DMA(s_inst.hadc);
 #if USE_DOUBLE_BUFFER
-    if (g_ntc_instance == &s_inst) g_ntc_instance = NULL;
+    if (g_ntc_instance == &s_inst) {
+        g_ntc_instance = NULL;
+    }
 #endif
 #endif
     s_inst.initialized = false;
@@ -284,15 +317,21 @@ void bsp_ntc_deinit(bsp_ntc_t** handle) {
 }
 
 bsp_status_t bsp_ntc_read(bsp_ntc_t* handle, float* temp_c) {
-    if (!handle || !s_inited) return BSP_ERR_NOTINIT;
-    if (!temp_c) return BSP_ERR_PARAM;
+    if (!handle || !s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
+    if (!temp_c) {
+        return BSP_ERR_PARAM;
+    }
 
     uint32_t adc_val;
     if (ntc_sample(&adc_val) != 0) {
         *temp_c = s_inst.is_first_sample ? 25.0f : s_inst.last_filtered_temp;
         return BSP_ERROR;
     }
-    if (adc_val > ADC_MAX_VALUE) adc_val = ADC_MAX_VALUE;
+    if (adc_val > ADC_MAX_VALUE) {
+        adc_val = ADC_MAX_VALUE;
+    }
 
     if (ntc_detect_fault(adc_val)) {
         *temp_c = s_inst.last_filtered_temp;
@@ -318,8 +357,12 @@ bsp_status_t bsp_ntc_read(bsp_ntc_t* handle, float* temp_c) {
 }
 
 bsp_status_t bsp_ntc_get_adc(bsp_ntc_t* handle, uint32_t* adc_val) {
-    if (!handle || !s_inited) return BSP_ERR_NOTINIT;
-    if (!adc_val) return BSP_ERR_PARAM;
+    if (!handle || !s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
+    if (!adc_val) {
+        return BSP_ERR_PARAM;
+    }
     return (ntc_sample(adc_val) == 0) ? BSP_OK : BSP_ERROR;
 }
 
@@ -328,20 +371,28 @@ bool bsp_ntc_is_fault(bsp_ntc_t* handle) {
 }
 
 void bsp_ntc_clear_fault(bsp_ntc_t* handle) {
-    if (!handle || !s_inited) return;
+    if (!handle || !s_inited) {
+        return;
+    }
     s_inst.fault_active  = false;
     s_inst.stuck_counter = 0;
 }
 
 void bsp_ntc_set_offset(bsp_ntc_t* handle, float offset) {
-    if (handle && s_inited) s_inst.temp_offset = offset;
+    if (handle && s_inited) {
+        s_inst.temp_offset = offset;
+    }
 }
 
 void bsp_ntc_reset_filter(bsp_ntc_t* handle) {
-    if (!handle || !s_inited) return;
+    if (!handle || !s_inited) {
+        return;
+    }
     s_inst.last_filtered_temp = 25.0f;
     s_inst.is_first_sample    = true;
     s_inst.moving_idx         = 0;
-    for (uint8_t i = 0; i < NTC_MOVING_AVG_LEN; i++) s_inst.adc_moving_buf[i] = ADC_MAX_VALUE / 2;
+    for (uint8_t i = 0; i < NTC_MOVING_AVG_LEN; i++) {
+        s_inst.adc_moving_buf[i] = ADC_MAX_VALUE / 2;
+    }
     s_inst.moving_sum = (ADC_MAX_VALUE / 2) * NTC_MOVING_AVG_LEN;
 }

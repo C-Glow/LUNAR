@@ -44,7 +44,9 @@ static bool bt401_queue_push(uint8_t buf_idx) {
         q->overrun++;
     }
     uint16_t len = s_inst.buf_lengths[buf_idx];
-    if (len > BT401_DMA_BUF_SIZE) len = BT401_DMA_BUF_SIZE;
+    if (len > BT401_DMA_BUF_SIZE) {
+        len = BT401_DMA_BUF_SIZE;
+    }
     memcpy(q->frames[q->head].data, s_inst.dma_buffer[buf_idx], len);
     q->frames[q->head].len = len;
     q->head                = next;
@@ -53,7 +55,9 @@ static bool bt401_queue_push(uint8_t buf_idx) {
 
 static bool bt401_queue_pop(bsp_bt401_frame_t* frame) {
     bt401_queue_t* q = &s_inst.rx_queue;
-    if (q->head == q->tail) return false;
+    if (q->head == q->tail) {
+        return false;
+    }
     memcpy(frame, &q->frames[q->tail], sizeof(bsp_bt401_frame_t));
     q->tail = (q->tail + 1) % BT401_FRAME_QUEUE_SIZE;
     return true;
@@ -64,8 +68,12 @@ static bool bt401_queue_pop(bsp_bt401_frame_t* frame) {
  *============================================================================*/
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t Size) {
-    if (!g_bt401_isr || huart->Instance != USART3) return;
-    if (HAL_UARTEx_GetRxEventType(huart) != HAL_UART_RXEVENT_IDLE) return;
+    if (!g_bt401_isr || huart->Instance != USART3) {
+        return;
+    }
+    if (HAL_UARTEx_GetRxEventType(huart) != HAL_UART_RXEVENT_IDLE) {
+        return;
+    }
 
     s_inst.buf_lengths[s_inst.current_buf] = Size;
     bt401_queue_push(s_inst.current_buf);
@@ -78,8 +86,12 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef* huart, uint16_t Size) {
  *============================================================================*/
 
 bsp_status_t bsp_bt401_init(bsp_bt401_t** handle, const bsp_bt401_config_t* config) {
-    if (!handle || !config || !config->huart) return BSP_ERR_PARAM;
-    if (*handle || s_inited) return BSP_ERR_BUSY;
+    if (!handle || !config || !config->huart) {
+        return BSP_ERR_PARAM;
+    }
+    if (*handle || s_inited) {
+        return BSP_ERR_BUSY;
+    }
 
     s_inst.huart         = config->huart;
     s_inst.rx_queue.head = s_inst.rx_queue.tail = 0;
@@ -101,7 +113,9 @@ bsp_status_t bsp_bt401_init(bsp_bt401_t** handle, const bsp_bt401_config_t* conf
 }
 
 void bsp_bt401_deinit(bsp_bt401_t** handle) {
-    if (!handle || !*handle || !s_inited) return;
+    if (!handle || !*handle || !s_inited) {
+        return;
+    }
     HAL_UART_DMAStop(s_inst.huart);
     g_bt401_isr        = NULL;
     s_inst.initialized = false;
@@ -110,26 +124,40 @@ void bsp_bt401_deinit(bsp_bt401_t** handle) {
 }
 
 bsp_status_t bsp_bt401_send(bsp_bt401_t* handle, const uint8_t* buf, uint16_t len) {
-    if (!handle || !s_inited) return BSP_ERR_NOTINIT;
-    if (!buf || !len) return BSP_ERR_PARAM;
+    if (!handle || !s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
+    if (!buf || !len) {
+        return BSP_ERR_PARAM;
+    }
     return (HAL_UART_Transmit(s_inst.huart, (uint8_t*)buf, len, HAL_MAX_DELAY) == HAL_OK) ? BSP_OK : BSP_ERR_HW;
 }
 
 int bsp_bt401_printf(bsp_bt401_t* handle, const char* format, ...) {
-    if (!handle || !s_inited) return -1;
+    if (!handle || !s_inited) {
+        return -1;
+    }
     char buf[128];
     va_list args;
     va_start(args, format);
     int len = vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
-    if (len < 0) len = 0;
-    if ((size_t)len >= sizeof(buf)) len = sizeof(buf) - 1;
+    if (len < 0) {
+        len = 0;
+    }
+    if ((size_t)len >= sizeof(buf)) {
+        len = sizeof(buf) - 1;
+    }
     return (HAL_UART_Transmit(s_inst.huart, (uint8_t*)buf, len, HAL_MAX_DELAY) == HAL_OK) ? len : 0;
 }
 
 bsp_status_t bsp_bt401_get_frame(bsp_bt401_t* handle, bsp_bt401_frame_t* frame) {
-    if (!handle || !s_inited) return BSP_ERR_NOTINIT;
-    if (!frame) return BSP_ERR_PARAM;
+    if (!handle || !s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
+    if (!frame) {
+        return BSP_ERR_PARAM;
+    }
     __disable_irq();
     bool has = bt401_queue_pop(frame);
     __enable_irq();

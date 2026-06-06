@@ -11,30 +11,28 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-typedef enum
-{
+typedef enum {
     PID_MODE_MANUAL = 0,
     PID_MODE_AUTO,
     PID_MODE_STANDBY
 } pid_mode_t;
 
-typedef struct pid_controller_s
-{
+typedef struct pid_controller_s {
     // 公共参数
     pid_mode_t mode;
-    float setpoint;    // 设定值 (°C)
-    float input;       // 输入值 (°C)
-    uint16_t output;   // 输出值 (PWM 0-1000)
+    float setpoint;   // 设定值 (°C)
+    float input;      // 输入值 (°C)
+    uint16_t output;  // 输出值 (PWM 0-1000)
 
     // PID参数（基于°C）
     float kp;
-    float ki;   // 单位：1/s
+    float ki;  // 单位：1/s
     float kd;
 
     // 积分项
     float integral;
     float integral_limit;
-    float integral_deadband;   // (°C)
+    float integral_deadband;  // (°C)
 
     // 微分项
     float last_input;
@@ -48,10 +46,10 @@ typedef struct pid_controller_s
 
     // 抗积分饱和
     bool anti_windup;
-    float windup_threshold;   // (°C)
+    float windup_threshold;  // (°C)
 
     // 死区控制（总宽度，单位：°C）
-    float deadband;   // 如 2.0f 表示 ±1.0°C（总宽 2°C）
+    float deadband;  // 如 2.0f 表示 ±1.0°C（总宽 2°C）
 
     // 微分先行
     bool derivative_on_measurement;
@@ -76,4 +74,4 @@ void pid_set_output_limits(pid_controller_t* pid, uint16_t min, uint16_t max);
 void pid_set_integral_params(pid_controller_t* pid, float deadband, float limit);
 void pid_set_derivative_filter(pid_controller_t* pid, float coef);
 
-#endif   // PID_H
+#endif  // PID_H
