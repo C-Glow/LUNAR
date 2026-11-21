@@ -51,8 +51,10 @@
 osThreadId_t         defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
     .name = "defaultTask",
-    .stack_size = 128 * 4,
-    .priority = (osPriority_t) osPriorityNormal,
+    /* 只执行一次 task_init()（内部只创建任务/注册回调），256B 足够 */
+    .stack_size = 128 * 2,
+    /* osPriorityNormal=24 会被当作 FreeRTOS 优先级直接使用，超出 configMAX_PRIORITIES(8) */
+    .priority = (osPriority_t) 1,
 };
 
 /* Private function prototypes -----------------------------------------------*/
@@ -115,16 +117,12 @@ void StartDefaultTask(void *argument)
 {
     /* USER CODE BEGIN StartDefaultTask */
     (void) argument;
+
+    /* 只做一次编排初始化，随后退出。
+     * 原实现 osThreadExit() 之后还有一段死循环（不可达代码），已删除。 */
     task_init();
-    // 任务结束
     osThreadExit();
-    /* Infinite loop */
-    for (;;)
-    {
-        HAL_GPIO_TogglePin(LED_B_GPIO_Port, LED_B_Pin);
-        HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
-        osDelay(1000);
-    }
+
     /* USER CODE END StartDefaultTask */
 }
 

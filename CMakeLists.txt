@@ -31,6 +31,19 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
+# ============================================================================
+# 调试日志开关
+#   -DENABLE_LOG=ON   编译 app/core/log.c，启用 LOG_PRINTF
+#   -DENABLE_LOG=OFF  不编译 app/core/log.c，LOG_PRINTF 展开为空语句（默认）
+#   两种模式都不改源码；关闭时 log.c 不产生任何目标文件。
+# ============================================================================
+option(ENABLE_LOG "Compile the debug log module (app/core/log.c)" OFF)
+if(ENABLE_LOG)
+    message("Debug log: ENABLED")
+else()
+    message("Debug log: DISABLED (app/core/log.c will not be compiled)")
+endif()
+
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
@@ -63,21 +76,34 @@ set(PROJECT_SOURCES
     # Components - CRC16
     components/crc16/crc16.c
     
-    # Components - Event Bus
-    components/event_bus/event_bus.c
+    # 事件总线已移除：唯一订阅者（app_main）改用直接回调，
+    # 详见 key_service.h / heat_service.h 的 register_callback 接口。
     
     # Components - Protocol
     components/protocol/modbus_slave.c
     components/protocol/at_parser.c
-    components/protocol/at_command_manager.c
+    # at_command_manager.c 未加入编译：全工程零引用（机制未接入 ble_service），
+    # 保留源文件待未来需要「带响应的 AT 命令队列」时再启用。
     
+    # Core utilities 见下方 LOG_SOURCES（受 ENABLE_LOG 控制）
+
     # Service sources
     app/service/key_service.c
+    app/service/heat_control.c
+    app/service/heat_indicator.c
     app/service/heat_service.c
     app/service/ble_service.c
 )
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${PROJECT_SOURCES})
+
+# 日志模块：仅在 ENABLE_LOG=ON 时参与编译
+if(ENABLE_LOG)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE app/core/log.c)
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE LOG_ENABLE=1)
+else()
+    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE LOG_ENABLE=0)
+endif()
 
 # Add app_main separately
 set(APP_MAIN app/app_main.c)
@@ -89,10 +115,11 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
     bsp
     app
+    app/core
     app/service
     components/pid
     components/crc16
-    components/event_bus
+    # components/event_bus  (已移除)
     components/protocol
 )
 

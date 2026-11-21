@@ -1,27 +1,18 @@
 /**
- * @file    app_handles.h
- * @brief   全局 BSP 句柄声明（各 service 共享）
- * @version 1.0
+ * @file app_handles.h
+ * @brief 应用层共享的键值定义
+ *
+ * 各 BSP 模块为单实例，对外接口不带句柄参数，因此本文件不再声明全局句柄。
  */
 
 #ifndef APP_HANDLES_H
 #define APP_HANDLES_H
 
-#include "bsp_bt401.h"
-#include "bsp_buzzer.h"
-#include "bsp_heat.h"
-#include "bsp_key.h"
-#include "bsp_led.h"
-#include "bsp_ntc.h"
-#include "bsp_rtc.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/*==============================================================================
- * 按键值定义（矩阵键盘返回的原始键值）
- *============================================================================*/
+/** 矩阵键盘返回的原始键值 */
 typedef enum {
     KEY_NULL       = 0,
     KEY_MUSIC      = 1,
@@ -41,17 +32,6 @@ typedef enum {
     KEY_HEAT       = 15,
     KEY_POWER      = 18
 } app_key_t;
-
-/*==============================================================================
- * 全局 BSP 句柄（在 app_main.c 中定义并初始化）
- *============================================================================*/
-extern bsp_bt401_t* g_bt401;
-extern bsp_buzzer_t* g_buzzer;
-extern bsp_heat_t* g_heat;
-extern bsp_key_t* g_key;
-extern bsp_led_t* g_led;
-extern bsp_ntc_t* g_ntc;
-extern bsp_rtc_t* g_rtc;
 
 #ifdef __cplusplus
 }

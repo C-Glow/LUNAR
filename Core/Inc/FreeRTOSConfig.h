@@ -62,9 +62,15 @@ extern uint32_t SystemCoreClock;
 #define configUSE_TICK_HOOK                     0
 #define configCPU_CLOCK_HZ                      (SystemCoreClock)
 #define configTICK_RATE_HZ                      ((TickType_t) 1000)
+/* 必须为 56：CMSIS-RTOS v2 封装层在 freertos_os2.h 里 #error 强校验，
+ * 因为 osPriority_t 定义了 56 个优先级，且其数值被直接当作 FreeRTOS 任务优先级使用。
+ * 因此本工程的任务优先级必须落在 1..56 区间（osPriorityIdle=1 .. osPriorityISR=56）。 */
 #define configMAX_PRIORITIES                    (56)
 #define configMINIMAL_STACK_SIZE                ((uint16_t) 128)
-#define configTOTAL_HEAP_SIZE                   ((size_t) 8192)
+/* 全工程 RTOS 对象已改为静态分配（StaticTask_t / StaticQueue_t /
+ * StaticSemaphore_t / StaticTimer_t），堆仅用于 CMSIS-RTOS2 内部极少开销。
+ * 原 8192B → 1024B，回收 7KB RAM。 */
+#define configTOTAL_HEAP_SIZE                   ((size_t) 1024)
 #define configMAX_TASK_NAME_LEN                 (16)
 #define configUSE_TRACE_FACILITY                1
 #define configUSE_16_BIT_TICKS                  0
@@ -82,7 +88,9 @@ extern uint32_t SystemCoreClock;
 #define configUSE_TIMERS                        1
 #define configTIMER_TASK_PRIORITY               (2)
 #define configTIMER_QUEUE_LENGTH                10
-#define configTIMER_TASK_STACK_DEPTH            256
+/* 单位是 word（4B）。定时器任务只跑 tick/beep 两个极简回调，
+ * 256 word(1KB) 过大，降到 128 word(512B)。 */
+#define configTIMER_TASK_STACK_DEPTH            128
 
 /* Set the following definitions to 1 to include the API function, or zero
 to exclude the API function. */

@@ -2,3 +2,7 @@ build
 .vscode
 cmake-build-debug-stm32
 openocd_flash
+# 主机侧测试产物
+tests/host/modbus_test
+tests/host/*.exe
+tests/host/heat_control_test

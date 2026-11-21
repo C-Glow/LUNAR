@@ -43,11 +43,11 @@ static void rtc_write_cnt(uint32_t c) {
     RTC->CNTL = c & 0xFFFF;
 }
 
-bsp_status_t bsp_rtc_init(bsp_rtc_t** handle, const bsp_rtc_config_t* config) {
-    if (!handle || !config || !config->hrtc) {
+bsp_status_t bsp_rtc_init(const bsp_rtc_config_t* config) {
+    if (!config || !config->hrtc) {
         return BSP_ERR_PARAM;
     }
-    if (*handle || s_inited) {
+    if (s_inited) {
         return BSP_ERR_BUSY;
     }
 
@@ -101,21 +101,19 @@ bsp_status_t bsp_rtc_init(bsp_rtc_t** handle, const bsp_rtc_config_t* config) {
 
     s_inst.initialized = true;
     s_inited           = true;
-    *handle            = (bsp_rtc_t*)&s_inst;
     return BSP_OK;
 }
 
-void bsp_rtc_deinit(bsp_rtc_t** handle) {
-    if (!handle || !*handle || !s_inited) {
+void bsp_rtc_deinit(void) {
+    if (!s_inited) {
         return;
     }
     s_inst.initialized = false;
     s_inited           = false;
-    *handle            = NULL;
 }
 
-bsp_status_t bsp_rtc_set_datetime(bsp_rtc_t* handle, const bsp_rtc_datetime_t* dt) {
-    if (!handle || !s_inited) {
+bsp_status_t bsp_rtc_set_datetime(const bsp_rtc_datetime_t* dt) {
+    if (!s_inited) {
         return BSP_ERR_NOTINIT;
     }
     if (!dt) {
@@ -125,22 +123,22 @@ bsp_status_t bsp_rtc_set_datetime(bsp_rtc_t* handle, const bsp_rtc_datetime_t* d
         dt->day > rtc_days_in_mon(dt->month, 2000 + dt->year) || dt->hour > 23 || dt->minute > 59 || dt->second > 59) {
         return BSP_ERR_PARAM;
     }
-    return bsp_rtc_set_utc(handle, bsp_rtc_datetime_to_utc(dt));
+    return bsp_rtc_set_utc(bsp_rtc_datetime_to_utc(dt));
 }
 
-bsp_status_t bsp_rtc_get_datetime(bsp_rtc_t* handle, bsp_rtc_datetime_t* dt) {
-    if (!handle || !s_inited) {
+bsp_status_t bsp_rtc_get_datetime(bsp_rtc_datetime_t* dt) {
+    if (!s_inited) {
         return BSP_ERR_NOTINIT;
     }
     if (!dt) {
         return BSP_ERR_PARAM;
     }
-    bsp_rtc_utc_to_datetime(bsp_rtc_get_utc(handle), dt);
+    bsp_rtc_utc_to_datetime(bsp_rtc_get_utc(), dt);
     return BSP_OK;
 }
 
-uint32_t bsp_rtc_get_utc(bsp_rtc_t* handle) {
-    if (!handle || !s_inited) {
+uint32_t bsp_rtc_get_utc(void) {
+    if (!s_inited) {
         return 0;
     }
     uint32_t c1, c2;
@@ -151,8 +149,8 @@ uint32_t bsp_rtc_get_utc(bsp_rtc_t* handle) {
     return c1 + UNIX_EPOCH_OFFSET;
 }
 
-bsp_status_t bsp_rtc_set_utc(bsp_rtc_t* handle, uint32_t utc) {
-    if (!handle || !s_inited) {
+bsp_status_t bsp_rtc_set_utc(uint32_t utc) {
+    if (!s_inited) {
         return BSP_ERR_NOTINIT;
     }
     uint32_t c = utc - UNIX_EPOCH_OFFSET;

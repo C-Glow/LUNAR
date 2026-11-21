@@ -19,12 +19,7 @@
 extern "C" {
 #endif
 
-/*==============================================================================
- * 类型定义
- *============================================================================*/
-
-/** 不透明 LED 管理句柄 */
-BSP_HANDLE_DECLARE(led);
+/* 类型定义 */
 
 /** LED 工作模式 */
 typedef enum {
@@ -58,51 +53,22 @@ typedef struct {
     uint8_t count;                /**< LED 数量 */
 } bsp_led_config_t;
 
-/*==============================================================================
- * API 函数
- *============================================================================*/
+/* API 函数 */
 
-/**
- * @brief 初始化 LED 模块
- * @param[out] handle  返回的 LED 句柄
- * @param[in]  config  硬件配置表
- * @return BSP_OK 成功
- */
-bsp_status_t bsp_led_init(bsp_led_t** handle, const bsp_led_config_t* config);
+/** 初始化 LED 模块 */
+bsp_status_t bsp_led_init(const bsp_led_config_t* config);
 
-/**
- * @brief 反初始化 LED 模块（全灭 + 释放资源）
- * @param handle 句柄指针的指针
- */
-void bsp_led_deinit(bsp_led_t** handle);
+/** 反初始化 LED 模块（全灭 + 释放资源） */
+void bsp_led_deinit(void);
 
-/**
- * @brief 设置指定 LED 的工作模式
- * @param handle       LED 句柄
- * @param index        LED 索引 [0, count)
- * @param mode         工作模式
- * @param interval_ms  闪烁间隔（仅 BSP_LED_MODE_BLINK 时有效，单位 ms）
- * @return BSP_OK 成功
- */
-bsp_status_t bsp_led_set_mode(bsp_led_t* handle, uint8_t index, bsp_led_mode_t mode, uint32_t interval_ms);
+/** 设置指定 LED 的工作模式 */
+bsp_status_t bsp_led_set_mode(uint8_t index, bsp_led_mode_t mode, uint32_t interval_ms);
 
-/**
- * @brief 查询指定 LED 是否处于点亮状态
- * @param handle  LED 句柄
- * @param index   LED 索引
- * @return true=亮, false=灭
- */
-bool bsp_led_is_on(bsp_led_t* handle, uint8_t index);
+/** 查询指定 LED 是否处于点亮状态 */
+bool bsp_led_is_on(uint8_t index);
 
-/**
- * @brief 周期性轮询（驱动闪烁逻辑）
- * @param handle      LED 句柄
- * @param elapsed_ms  距上次调用经过的毫秒数
- *
- * @note  上层（service/任务）应周期性调用此函数，
- *         典型周期 20~50ms。无 OS 依赖。
- */
-void bsp_led_poll(bsp_led_t* handle, uint32_t elapsed_ms);
+/** 周期性轮询以驱动闪烁；调用周期建议 20~50ms */
+void bsp_led_poll(uint32_t elapsed_ms);
 
 #ifdef __cplusplus
 }

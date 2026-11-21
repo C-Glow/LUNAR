@@ -18,12 +18,7 @@
 extern "C" {
 #endif
 
-/*==============================================================================
- * 类型定义
- *============================================================================*/
-
-/** 不透明蜂鸣器句柄 */
-BSP_HANDLE_DECLARE(buzzer);
+/* 类型定义 */
 
 /** 蜂鸣器硬件配置 */
 typedef struct {
@@ -32,44 +27,28 @@ typedef struct {
     GPIO_PinState active_level; /**< 有效电平（高/低） */
 } bsp_buzzer_config_t;
 
-/*==============================================================================
- * API 函数
- *============================================================================*/
+/* API 函数 */
 
-/**
- * @brief 初始化蜂鸣器
- * @param[out] handle  返回的蜂鸣器句柄
- * @param[in]  config  硬件配置
- * @return BSP_OK 成功
- */
-bsp_status_t bsp_buzzer_init(bsp_buzzer_t** handle, const bsp_buzzer_config_t* config);
+/** 初始化蜂鸣器 */
+bsp_status_t bsp_buzzer_init(const bsp_buzzer_config_t* config);
 
-/**
- * @brief 反初始化蜂鸣器（关闭并释放资源）
- * @param handle 句柄指针的指针
- */
-void bsp_buzzer_deinit(bsp_buzzer_t** handle);
+/** 反初始化蜂鸣器（关闭并释放资源） */
+void bsp_buzzer_deinit(void);
 
-/**
- * @brief 开启蜂鸣器
- */
-bsp_status_t bsp_buzzer_on(bsp_buzzer_t* handle);
+/** 开启蜂鸣器 */
+bsp_status_t bsp_buzzer_on(void);
 
-/**
- * @brief 关闭蜂鸣器
- */
-bsp_status_t bsp_buzzer_off(bsp_buzzer_t* handle);
+/** 关闭蜂鸣器 */
+bsp_status_t bsp_buzzer_off(void);
 
-/**
- * @brief 翻转蜂鸣器状态
- */
-bsp_status_t bsp_buzzer_toggle(bsp_buzzer_t* handle);
+/** 翻转蜂鸣器状态 */
+bsp_status_t bsp_buzzer_toggle(void);
 
 /**
  * @brief 获取蜂鸣器当前状态
  * @return true=响, false=不响
  */
-bool bsp_buzzer_is_on(bsp_buzzer_t* handle);
+bool bsp_buzzer_is_on(void);
 
 #ifdef __cplusplus
 }

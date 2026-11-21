@@ -31,7 +31,8 @@ typedef struct {
 } at_parse_result_t;
 
 at_parse_result_t at_parse_frame(const uint8_t* data, uint16_t len);
-void decode_at_command(uint8_t* data, size_t len);
+/* 注意：解析器只做「字节 → 命令枚举」的纯转换，不执行任何硬件动作。
+ * 执行由上层（ble_service / app_main）完成，以保证 protocol 层零 BSP 依赖。 */
 
 #ifdef __cplusplus
 }

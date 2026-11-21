@@ -45,7 +45,9 @@ void MX_ADC1_Init(void)
      */
     hadc1.Instance = ADC1;
     hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
-    hadc1.Init.ContinuousConvMode = ENABLE;
+    /* 单次转换：温度控制周期 500ms，按需转换 5 个样本仅 ~8us。
+     * 原 ENABLE + DMA 会在 1.56us/样本下产生约 36k IRQ/s，白吃 10~20% CPU。 */
+    hadc1.Init.ContinuousConvMode = DISABLE;
     hadc1.Init.DiscontinuousConvMode = DISABLE;
     hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
     hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;

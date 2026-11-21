@@ -6,8 +6,9 @@
             "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
-		    "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
             "cacheVariables": {
+                "ENABLE_LOG": "OFF"
             }
         },
         {
@@ -15,6 +16,15 @@
             "inherits": "default",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "DebugLog",
+            "displayName": "Debug + 日志开启",
+            "description": "调试用：编译 app/core/log.c，串口输出 Temp/BLE/状态日志",
+            "inherits": "Debug",
+            "cacheVariables": {
+                "ENABLE_LOG": "ON"
             }
         },
         {
@@ -26,9 +36,11 @@
         },
         {
             "name": "Release",
+            "displayName": "Release（日志关闭，发布用）",
             "inherits": "default",
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
+                "CMAKE_BUILD_TYPE": "Release",
+                "ENABLE_LOG": "OFF"
             }
         },
         {
@@ -43,6 +55,10 @@
         {
             "name": "Debug",
             "configurePreset": "Debug"
+        },
+        {
+            "name": "DebugLog",
+            "configurePreset": "DebugLog"
         },
         {
             "name": "RelWithDebInfo",

@@ -32,11 +32,11 @@ static void led_hw_write(uint8_t i, bool on) {
     s_inst.leds[i].state = on;
 }
 
-bsp_status_t bsp_led_init(bsp_led_t** handle, const bsp_led_config_t* config) {
-    if (!handle || !config || !config->hw_table || config->count == 0) {
+bsp_status_t bsp_led_init(const bsp_led_config_t* config) {
+    if (!config || !config->hw_table || config->count == 0) {
         return BSP_ERR_PARAM;
     }
-    if (*handle || s_inited) {
+    if (s_inited) {
         return BSP_ERR_BUSY;
     }
 
@@ -50,12 +50,11 @@ bsp_status_t bsp_led_init(bsp_led_t** handle, const bsp_led_config_t* config) {
 
     s_inst.initialized = true;
     s_inited           = true;
-    *handle            = (bsp_led_t*)&s_inst;
     return BSP_OK;
 }
 
-void bsp_led_deinit(bsp_led_t** handle) {
-    if (!handle || !*handle || !s_inited) {
+void bsp_led_deinit(void) {
+    if (!s_inited) {
         return;
     }
     for (uint8_t i = 0; i < BSP_LED_COUNT; i++) {
@@ -63,11 +62,10 @@ void bsp_led_deinit(bsp_led_t** handle) {
     }
     s_inst.initialized = false;
     s_inited           = false;
-    *handle            = NULL;
 }
 
-bsp_status_t bsp_led_set_mode(bsp_led_t* handle, uint8_t index, bsp_led_mode_t mode, uint32_t interval_ms) {
-    if (!handle || !s_inited || index >= BSP_LED_COUNT) {
+bsp_status_t bsp_led_set_mode(uint8_t index, bsp_led_mode_t mode, uint32_t interval_ms) {
+    if (!s_inited || index >= BSP_LED_COUNT) {
         return BSP_ERR_NOTINIT;
     }
 
@@ -89,12 +87,12 @@ bsp_status_t bsp_led_set_mode(bsp_led_t* handle, uint8_t index, bsp_led_mode_t m
     return BSP_OK;
 }
 
-bool bsp_led_is_on(bsp_led_t* handle, uint8_t index) {
-    return (handle && s_inited && index < BSP_LED_COUNT) ? s_inst.leds[index].state : false;
+bool bsp_led_is_on(uint8_t index) {
+    return (s_inited && index < BSP_LED_COUNT) ? s_inst.leds[index].state : false;
 }
 
-void bsp_led_poll(bsp_led_t* handle, uint32_t elapsed_ms) {
-    if (!handle || !s_inited || !elapsed_ms) {
+void bsp_led_poll(uint32_t elapsed_ms) {
+    if (!s_inited || !elapsed_ms) {
         return;
     }
 

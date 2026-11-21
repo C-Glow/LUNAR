@@ -15,12 +15,7 @@
 extern "C" {
 #endif
 
-/*==============================================================================
- * 类型定义
- *============================================================================*/
-
-/** 不透明 RTC 句柄 */
-BSP_HANDLE_DECLARE(rtc);
+/* 类型定义 */
 
 /** 日期时间结构体 */
 typedef struct {
@@ -38,51 +33,30 @@ typedef struct {
     RTC_HandleTypeDef* hrtc; /**< HAL RTC 句柄（CubeMX 生成） */
 } bsp_rtc_config_t;
 
-/*==============================================================================
- * API 函数
- *============================================================================*/
+/* API 函数 */
 
-/**
- * @brief 初始化 RTC
- * @param[out] handle  返回的 RTC 句柄
- * @param[in]  config  配置（含 HAL 句柄）
- * @return BSP_OK 成功
- */
-bsp_status_t bsp_rtc_init(bsp_rtc_t** handle, const bsp_rtc_config_t* config);
+/** 初始化 RTC */
+bsp_status_t bsp_rtc_init(const bsp_rtc_config_t* config);
 
-/**
- * @brief 反初始化 RTC
- */
-void bsp_rtc_deinit(bsp_rtc_t** handle);
+/** 反初始化 RTC */
+void bsp_rtc_deinit(void);
 
-/**
- * @brief 设置日期时间
- */
-bsp_status_t bsp_rtc_set_datetime(bsp_rtc_t* handle, const bsp_rtc_datetime_t* dt);
+/** 设置日期时间 */
+bsp_status_t bsp_rtc_set_datetime(const bsp_rtc_datetime_t* dt);
 
-/**
- * @brief 获取日期时间
- */
-bsp_status_t bsp_rtc_get_datetime(bsp_rtc_t* handle, bsp_rtc_datetime_t* dt);
+/** 获取日期时间 */
+bsp_status_t bsp_rtc_get_datetime(bsp_rtc_datetime_t* dt);
 
-/**
- * @brief 获取 UTC 时间戳（自 1970-01-01 秒数）
- */
-uint32_t bsp_rtc_get_utc(bsp_rtc_t* handle);
+/** 获取 UTC 时间戳（自 1970-01-01 秒数） */
+uint32_t bsp_rtc_get_utc(void);
 
-/**
- * @brief 设置 UTC 时间戳
- */
-bsp_status_t bsp_rtc_set_utc(bsp_rtc_t* handle, uint32_t utc);
+/** 设置 UTC 时间戳 */
+bsp_status_t bsp_rtc_set_utc(uint32_t utc);
 
-/**
- * @brief UTC 转日期时间
- */
+/** UTC 转日期时间 */
 void bsp_rtc_utc_to_datetime(uint32_t utc, bsp_rtc_datetime_t* dt);
 
-/**
- * @brief 日期时间转 UTC
- */
+/** 日期时间转 UTC */
 uint32_t bsp_rtc_datetime_to_utc(const bsp_rtc_datetime_t* dt);
 
 #ifdef __cplusplus

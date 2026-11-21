@@ -1,26 +1,22 @@
 /**
- * @file    bsp_heat.c
- * @brief   加热模块驱动实现（静态分配）
- * @version 2.1
+ * @file bsp_heat.c
+ * @brief 加热模块驱动
  */
 
 #include "bsp_heat.h"
 #include "bsp_pwm.h"
 
-struct bsp_heat_s {
-    bsp_pwm_t* pwm;
+static struct {
     uint8_t current_power;
-    bool initialized;
-};
+} s_heat;
 
-static struct bsp_heat_s s_inst;
 static bool s_inited = false;
 
-bsp_status_t bsp_heat_init(bsp_heat_t** handle, const bsp_heat_config_t* config) {
-    if (!handle || !config || !config->htim) {
+bsp_status_t bsp_heat_init(const bsp_heat_config_t* config) {
+    if (!config || !config->htim) {
         return BSP_ERR_PARAM;
     }
-    if (*handle || s_inited) {
+    if (s_inited) {
         return BSP_ERR_BUSY;
     }
 
@@ -30,44 +26,51 @@ bsp_status_t bsp_heat_init(bsp_heat_t** handle, const bsp_heat_config_t* config)
         .freq_hz    = config->freq_hz,
         .resolution = config->resolution,
     };
-    bsp_status_t ret = bsp_pwm_init(&s_inst.pwm, &pwm_cfg);
+    bsp_status_t ret = bsp_pwm_init(&pwm_cfg);
     if (ret != BSP_OK) {
         return ret;
     }
 
-    s_inst.current_power = 0;
-    s_inst.initialized   = true;
+    s_heat.current_power = 0;
     s_inited             = true;
-    *handle              = (bsp_heat_t*)&s_inst;
     return BSP_OK;
 }
 
-void bsp_heat_deinit(bsp_heat_t** handle) {
-    if (!handle || !*handle || !s_inited) {
+void bsp_heat_deinit(void) {
+    if (!s_inited) {
         return;
     }
-    bsp_pwm_set_duty(s_inst.pwm, 0);
-    bsp_pwm_stop(s_inst.pwm);
-    bsp_pwm_deinit(&s_inst.pwm);
-    s_inst.initialized = false;
-    s_inited           = false;
-    *handle            = NULL;
+    (void)bsp_heat_stop();
+    bsp_pwm_deinit();
+    s_heat.current_power = 0;
+    s_inited             = false;
 }
 
-bsp_status_t bsp_heat_start(bsp_heat_t* handle) {
-    return (handle && s_inited) ? bsp_pwm_start(s_inst.pwm) : BSP_ERR_NOTINIT;
+bsp_status_t bsp_heat_start(void) {
+    if (!s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
+    /* 启动前确保占空比为 0：HAL_TIM_PWM_Stop 不会清除 CCR，
+     * 若上次停止前留有占空比，直接 start 会恢复该输出。 */
+    (void)bsp_heat_set_power(0);
+    return bsp_pwm_start();
 }
 
-bsp_status_t bsp_heat_stop(bsp_heat_t* handle) {
-    return (handle && s_inited) ? bsp_pwm_stop(s_inst.pwm) : BSP_ERR_NOTINIT;
+bsp_status_t bsp_heat_stop(void) {
+    if (!s_inited) {
+        return BSP_ERR_NOTINIT;
+    }
+    /* 先归零再停输出，避免之后 start 时恢复旧占空比 */
+    (void)bsp_heat_set_power(0);
+    return bsp_pwm_stop();
 }
 
-bsp_status_t bsp_heat_set_power(bsp_heat_t* handle, uint8_t power_percent) {
-    if (!handle || !s_inited) {
+bsp_status_t bsp_heat_set_power(uint8_t power_percent) {
+    if (!s_inited) {
         return BSP_ERR_NOTINIT;
     }
     uint8_t power = (power_percent > BSP_HEAT_MAX_POWER) ? BSP_HEAT_MAX_POWER : power_percent;
-    uint32_t res  = bsp_pwm_get_resolution(s_inst.pwm);
+    uint32_t res  = bsp_pwm_get_resolution();
     if (!res) {
         return BSP_ERROR;
     }
@@ -75,13 +78,13 @@ bsp_status_t bsp_heat_set_power(bsp_heat_t* handle, uint8_t power_percent) {
     if (duty >= res) {
         duty = res - 1;
     }
-    bsp_status_t ret = bsp_pwm_set_duty(s_inst.pwm, duty);
+    bsp_status_t ret = bsp_pwm_set_duty(duty);
     if (ret == BSP_OK) {
-        s_inst.current_power = power;
+        s_heat.current_power = power;
     }
     return ret;
 }
 
-uint8_t bsp_heat_get_power(bsp_heat_t* handle) {
-    return (handle && s_inited) ? s_inst.current_power : 0;
+uint8_t bsp_heat_get_power(void) {
+    return s_inited ? s_heat.current_power : 0;
 }

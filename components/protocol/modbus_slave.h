@@ -5,30 +5,26 @@
 extern "C" {
 #endif
 
-/*----------------------------------include-----------------------------------*/
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-/*-----------------------------------macro------------------------------------*/
-#define PROTOCOL_VERSION "1.0.0"
-/*----------------------------------typedef-----------------------------------*/
-// 寄存器访问权限
+
+/* 寄存器访问权限 */
 typedef enum {
     REG_ACCESS_WRITE_ONLY = 0x01,
     REG_ACCESS_READ_ONLY  = 0x02,
     REG_ACCESS_READ_WRITE = 0x03,
 } RegisterAccess;
 
-// 寄存器定义（带访问权限信息）
+/* 寄存器定义 */
 typedef struct {
-    const char* name;
     RegisterAccess access;
     uint16_t min_val;
     uint16_t max_val;
-    uint16_t def_val;
+    uint16_t def_val; /* 当前未使用，保留以便将来做参数恢复出厂设置 */
 } RegisterDescriptor;
 
-// 协议处理结果
+/* 协议处理结果 */
 typedef enum {
     PROTOCOL_SUCCESS = 0,
     PROTOCOL_ERR_INVALID_FRAME,
@@ -42,7 +38,7 @@ typedef enum {
     PROTOCOL_ERR_BUSY,
 } ProtocolResult;
 
-// 寄存器ID枚举
+/* 寄存器 ID */
 typedef enum {
     REG_POWER_SWITCH = 0,    // 关机（只写）
     REG_UTC_TIMESTAMP_HIGH,  // UTC时间戳（高位，只写）
@@ -59,32 +55,62 @@ typedef enum {
     REG_COUNT,
 } RegisterID;
 
-// 回调函数类型定义
+/* 注意：这两个回调在「持有 g_reg_mutex」的上下文中被调用。
+ * 回调内严禁调用 register_read / register_write / register_batch_write / register_batch_read，
+ * 否则会对同一个非递归互斥量二次 acquire，任务永久阻塞（osWaitForever）。
+ * 需要原始寄存器值时请使用 register_read_unlocked()。 */
 typedef void (*RegisterWriteCallback)(RegisterID reg, uint16_t value);
 typedef uint16_t (*RegisterReadCallback)(RegisterID reg);
 
-/*----------------------------------variable----------------------------------*/
-// 在protocol.c中定义
+/* 外部端口（依赖注入，使协议层零 BSP 依赖） */
+
+/** 响应帧发送端口 */
+typedef void (*protocol_tx_fn_t)(const uint8_t* buf, uint16_t len);
+
+/**
+ * @brief UTC 写入端口
+ * @param utc  Unix 时间戳
+ * @return true 表示写入成功
+ */
+typedef bool (*protocol_rtc_fn_t)(uint32_t utc);
+
+/* 定义在 modbus_slave.c */
 extern const RegisterDescriptor g_register_table[REG_COUNT];
 
-/*----------------------------------function----------------------------------*/
-// 基础协议接口
+/* 基础协议接口 */
 void protocol_init(void);  // 初始化协议模块（创建互斥锁）
+
+/**
+ * @brief 注入响应发送端口
+ * @note  未注入时协议层静默丢弃响应（便于纯逻辑测试）
+ */
+void protocol_set_tx(protocol_tx_fn_t fn);
+
+/**
+ * @brief 注入 RTC 写入端口
+ * @note  未注入时 UTC 写入视为成功
+ */
+void protocol_set_rtc_writer(protocol_rtc_fn_t fn);
 ProtocolResult protocol_process_frame(const uint8_t* data, uint16_t len, uint8_t* response, uint16_t* resp_len);
 bool protocol_handle_request(const uint8_t* data, size_t len);
 void protocol_upload_heating_status(void);
 
-// 寄存器管理接口
+/* 寄存器管理接口 */
 ProtocolResult register_write(RegisterID reg, uint16_t value);
 ProtocolResult register_batch_write(RegisterID start_reg, const uint16_t* values, uint8_t count);
 uint16_t register_read(RegisterID reg);
+/**
+ * @brief 读取寄存器原始值（不加锁）
+ * @note  仅供已持有寄存器锁的回调内部使用，外部调用请用 register_read()。
+ */
+uint16_t register_read_unlocked(RegisterID reg);
 ProtocolResult register_batch_read(RegisterID start_reg, uint16_t* values, uint8_t count);
 
-// 回调注册接口
+/* 回调注册接口 */
 void protocol_register_write_callback(RegisterWriteCallback cb);
 void protocol_register_read_callback(RegisterReadCallback cb);
 
-// 工具函数
+/* 工具函数 */
 uint16_t protocol_calc_crc16(const uint8_t* data, uint16_t len);
 bool protocol_validate_crc(const uint8_t* data, uint16_t len);
 

@@ -1,536 +1,351 @@
 /**
  * @file heat_service.c
- * @brief 加热控制服务 PID温控 + 定时 + 状态机 (CMSIS-RTOS v2)
- * @version 2.1
+ * @brief 加热服务：RTOS 资源管理与硬件输出
+ *
+ * 状态机与 PID 在 heat_control.c，指示输出在 heat_indicator.c。
+ * 本文件只负责创建资源、采样温度、把控制层输出翻译成 BSP 调用。
  */
 
 #include "heat_service.h"
+
+#include <string.h>
+
+/* 静态分配类型定义在 FreeRTOS.h，CMSIS-RTOS2 头文件不转出 */
+#include "FreeRTOS.h"
+
 #include "app_config.h"
 #include "app_handles.h"
-#include "bsp_buzzer.h"
-#include "bsp_heat.h"
 #include "bsp_led.h"
+#include "bsp_heat.h"
 #include "bsp_ntc.h"
-#include "event_bus.h"
-#include "pid.h"
-
-/* ---- 蜂鸣器辅助 ---- */
-static osTimerId_t s_beep_timer = NULL;
-
-static void beep_timer_cb(void* arg) {
-    (void)arg;
-    bsp_buzzer_off(g_buzzer);
-}
-
-static bool buzzer_beep_local(uint32_t duration_ms) {
-    if (!s_beep_timer) {
-        s_beep_timer = osTimerNew(beep_timer_cb, osTimerOnce, NULL, NULL);
-        if (!s_beep_timer) {
-            return false;
-        }
-    } else {
-        if (osTimerIsRunning(s_beep_timer)) {
-            osTimerStop(s_beep_timer);
-        }
-    }
-    bsp_buzzer_on(g_buzzer);
-    return (osTimerStart(s_beep_timer, CMSIS_TICKS(duration_ms)) == osOK);
-}
-
-/* ---- LED 时间指示 ---- */
-static void led_time_select(uint32_t remain_sec) {
-    static const uint32_t SEC_10 = 10U * 60U;
-    static const uint32_t SEC_30 = 30U * 60U;
-    bsp_led_set_mode(g_led, BSP_LED_10MIN, BSP_LED_MODE_OFF, 0);
-    bsp_led_set_mode(g_led, BSP_LED_30MIN, BSP_LED_MODE_OFF, 0);
-    bsp_led_set_mode(g_led, BSP_LED_60MIN, BSP_LED_MODE_OFF, 0);
-    if (remain_sec > SEC_30) {
-        bsp_led_set_mode(g_led, BSP_LED_60MIN, BSP_LED_MODE_ON, 0);
-    } else if (remain_sec > SEC_10) {
-        bsp_led_set_mode(g_led, BSP_LED_30MIN, BSP_LED_MODE_ON, 0);
-    } else if (remain_sec > 0) {
-        bsp_led_set_mode(g_led, BSP_LED_10MIN, BSP_LED_MODE_ON, 0);
-    }
-}
-
-/* ---- 上传回调 ---- */
-static heat_upload_cb_t s_upload_cb = NULL;
-void heat_service_set_upload_handler(heat_upload_cb_t cb) {
-    s_upload_cb = cb;
-}
-
-static const HeatLevelTempMap s_heat_level_temp_map[] = {
-    {HEAT_LEVEL_1, 35.0f}, {HEAT_LEVEL_2, 45.0f}, {HEAT_LEVEL_3, 55.0f}};
-
-typedef enum {
-    MSG_TIMER_EXPIRE  = 0x01,
-    MSG_UPDATE_REMAIN = 0x02,
-    MSG_SET_STATUS    = 0x03,
-    MSG_SET_LEVEL     = 0x04,
-    MSG_SET_TIMER     = 0x05
-} HeatMsgType;
+#include "heat_control.h"
+#include "heat_indicator.h"
+#include "log.h"
 
 typedef struct {
-    HeatMsgType type;
-    union {
-        HeatStatus status;
-        HeatLevel level;
-        uint16_t minute;
-    } param;
-} HeatMsg;
-
-typedef struct {
-    HeatStatus status;
-    HeatLevel level;
-    float target_temperature;
-    uint16_t set_time_min;
-    uint32_t remain_sec;
-    bool is_timing;
-    pid_controller_t pid;
+    osMessageQueueId_t cmd_queue;
+    osTimerId_t tick_timer;   /* 1 秒节拍：递减剩余时间 */
     osMutexId_t mutex;
-    osMessageQueueId_t ctrl_queue;
-    osTimerId_t heating_timer;
-    osTimerId_t remain_timer;
-    uint8_t ntc_fail_count;
-} HeatTaskPrivData;
+    heat_upload_cb_t upload_cb;
+    heat_state_cb_t state_cb;
+    bool hardware_on;         /* 当前硬件输出状态，用于避免重复调用 */
+    uint8_t last_power;
+    HeatStatus last_status;
+} heat_runtime_t;
 
-static HeatTaskPrivData s_heat_data = {.status = HEAT_STATUS_STOP, .level = HEAT_LEVEL_1, .target_temperature = 35.0f};
+static heat_runtime_t s_rt = {
+    .last_status = HEAT_STATUS_STOP,
+    .last_power  = 0,
+};
 
-/* ---- 锁 ---- */
-static bool heat_lock_internal(void) {
-    bool ok = (osMutexAcquire(s_heat_data.mutex, CMSIS_TICKS(HEAT_MUTEX_TIMEOUT_MS)) == osOK);
-    if (!ok) {
-        LOG_PRINTF("Heat mutex lock failed!\r\n");
-    }
-    return ok;
-}
-#define HEAT_LOCK() heat_lock_internal()
-#define HEAT_UNLOCK() osMutexRelease(s_heat_data.mutex)
+/* RTOS 对象静态分配 */
+static StaticTask_t s_task_tcb;
+static StackType_t s_task_stack[TASK_HEAT_STACK / sizeof(StackType_t)];
+static StaticQueue_t s_cmd_queue_cb;
+static uint8_t s_cmd_queue_buf[HEAT_QUEUE_LEN * sizeof(heat_cmd_t)];
+static StaticSemaphore_t s_mutex_cb;
+static StaticTimer_t s_tick_timer_cb;
 
-static float heat_get_temp_by_level(HeatLevel level) {
-    for (uint8_t i = 0; i < BSP_ARRAY_SIZE(s_heat_level_temp_map); i++) {
-        if (s_heat_level_temp_map[i].level == level) {
-            return s_heat_level_temp_map[i].target_temp;
-        }
-    }
-    return 35.0f;
-}
-
-static void heat_hw_turn_off(void) {
-    bsp_heat_stop(g_heat);
-    bsp_led_set_mode(g_led, BSP_LED_RF, BSP_LED_MODE_OFF, 0);
-}
-static void heat_hw_turn_on(void) {
-    bsp_heat_start(g_heat);
-    bsp_led_set_mode(g_led, BSP_LED_RF, BSP_LED_MODE_ON, 0);
-}
-
-static void heat_stop_all(void) {
-    HeatStatus old_status = HEAT_STATUS_STOP;
-    if (HEAT_LOCK()) {
-        old_status                 = s_heat_data.status;
-        s_heat_data.status         = HEAT_STATUS_STOP;
-        s_heat_data.remain_sec     = 0;
-        s_heat_data.set_time_min   = 0;
-        s_heat_data.is_timing      = false;
-        s_heat_data.ntc_fail_count = 0;
-        HEAT_UNLOCK();
-    }
-    if (old_status == HEAT_STATUS_RUNNING) {
-        heat_hw_turn_off();
-        led_time_select(0);
-        if (s_heat_data.remain_timer) {
-            osTimerStop(s_heat_data.remain_timer);
-        }
-        if (s_heat_data.heating_timer) {
-            osTimerStop(s_heat_data.heating_timer);
-        }
-        pid_reset(&s_heat_data.pid);
-        if (s_upload_cb) {
-            s_upload_cb();
-        }
-    }
-}
-
-static void heating_timer_cb(void* arg) {
+static void tick_timer_cb(void* arg) {
     (void)arg;
-    HeatMsg msg = {.type = MSG_TIMER_EXPIRE};
-    if (s_heat_data.ctrl_queue) {
-        osMessageQueuePut(s_heat_data.ctrl_queue, &msg, 0, 0);
-    }
-}
-static void remain_timer_cb(void* arg) {
-    (void)arg;
-    HeatMsg msg = {.type = MSG_UPDATE_REMAIN};
-    if (s_heat_data.ctrl_queue) {
-        osMessageQueuePut(s_heat_data.ctrl_queue, &msg, 0, 0);
-    }
-}
-
-static void process_msg_timer_expire(void) {
-    HeatStatus st = HEAT_STATUS_STOP;
-    uint16_t tm   = 0;
-    if (HEAT_LOCK()) {
-        st = s_heat_data.status;
-        tm = s_heat_data.set_time_min;
-        HEAT_UNLOCK();
-    }
-    if (st == HEAT_STATUS_RUNNING && tm > 0) {
-        heat_stop_all();
-    }
-}
-
-static void process_msg_update_remain(void) {
-    uint32_t remain = 0;
-    HeatStatus st   = HEAT_STATUS_STOP;
-    if (HEAT_LOCK()) {
-        st = s_heat_data.status;
-        if (st == HEAT_STATUS_RUNNING && s_heat_data.remain_sec > 0) {
-            s_heat_data.remain_sec--;
-            remain = s_heat_data.remain_sec;
-        }
-        HEAT_UNLOCK();
-    }
-    if (st == HEAT_STATUS_RUNNING) {
-        if (remain > 0) {
-            led_time_select(remain);
-        } else {
-            heat_stop_all();
-        }
-    }
-}
-
-static void process_msg_set_status(HeatStatus new_status) {
-    HeatStatus old = HEAT_STATUS_STOP;
-    uint16_t tm    = 0;
-    if (HEAT_LOCK()) {
-        old                = s_heat_data.status;
-        tm                 = s_heat_data.set_time_min;
-        s_heat_data.status = new_status;
-        HEAT_UNLOCK();
-    }
-    if (new_status == HEAT_STATUS_STOP) {
-        heat_stop_all();
-        event_publish(EVENT_HEAT_STATUS_CHANGE, HEAT_STATUS_STOP);
-    } else if (new_status == HEAT_STATUS_RUNNING && old != HEAT_STATUS_RUNNING) {
-        heat_hw_turn_on();
-        event_publish(EVENT_HEAT_STATUS_CHANGE, HEAT_STATUS_RUNNING);
-        if (tm > 0) {
-            if (HEAT_LOCK()) {
-                s_heat_data.remain_sec = (uint32_t)tm * 60;
-                s_heat_data.is_timing  = true;
-                HEAT_UNLOCK();
-            }
-            if (s_heat_data.heating_timer) {
-                osTimerStop(s_heat_data.heating_timer);
-                osTimerStart(s_heat_data.heating_timer, CMSIS_TICKS(s_heat_data.remain_sec * 1000));
-            }
-            if (s_heat_data.remain_timer && !osTimerIsRunning(s_heat_data.remain_timer)) {
-                osTimerStart(s_heat_data.remain_timer, CMSIS_TICKS(1000));
-            }
-        }
-    }
-}
-
-static void process_msg_set_level(HeatLevel new_level) {
-    if (new_level > HEAT_LEVEL_MAX) {
+    if (!s_rt.cmd_queue) {
         return;
     }
-    float t = heat_get_temp_by_level(new_level);
-    if (HEAT_LOCK()) {
-        s_heat_data.level              = new_level;
-        s_heat_data.target_temperature = t;
-        HEAT_UNLOCK();
-    }
-    LOG_PRINTF("Heat level set to %d, target: %.1fC\r\n", new_level, t);
+    heat_cmd_t cmd = {.type = HEAT_CMD_TICK_1S};
+    (void)osMessageQueuePut(s_rt.cmd_queue, &cmd, 0, 0);
 }
 
-static void process_msg_set_timer(uint16_t minute) {
-    if (minute > HEAT_MAX_TIMER_MIN) {
-        return;
-    }
-    HeatStatus st   = HEAT_STATUS_STOP;
-    bool timing     = (minute > 0);
-    uint32_t remain = timing ? (uint32_t)minute * 60 : 0;
-    if (HEAT_LOCK()) {
-        st                       = s_heat_data.status;
-        s_heat_data.set_time_min = minute;
-        s_heat_data.is_timing    = timing;
-        s_heat_data.remain_sec   = remain;
-        HEAT_UNLOCK();
-    }
-    led_time_select(remain);
-    if (timing && st == HEAT_STATUS_RUNNING) {
-        if (s_heat_data.heating_timer) {
-            osTimerStop(s_heat_data.heating_timer);
-            osTimerStart(s_heat_data.heating_timer, CMSIS_TICKS(remain * 1000));
-        }
-        if (s_heat_data.remain_timer && !osTimerIsRunning(s_heat_data.remain_timer)) {
-            osTimerStart(s_heat_data.remain_timer, CMSIS_TICKS(1000));
-        }
-    } else {
-        if (s_heat_data.heating_timer) {
-            osTimerStop(s_heat_data.heating_timer);
-        }
-        if (s_heat_data.remain_timer) {
-            osTimerStop(s_heat_data.remain_timer);
-        }
-    }
-}
-
-static void process_heat_message(const HeatMsg* msg) {
-    if (!msg) {
-        return;
-    }
-    switch (msg->type) {
-    case MSG_TIMER_EXPIRE:
-        process_msg_timer_expire();
-        break;
-    case MSG_UPDATE_REMAIN:
-        process_msg_update_remain();
-        break;
-    case MSG_SET_STATUS:
-        process_msg_set_status(msg->param.status);
-        break;
-    case MSG_SET_LEVEL:
-        process_msg_set_level(msg->param.level);
-        break;
-    case MSG_SET_TIMER:
-        process_msg_set_timer(msg->param.minute);
-        break;
-    default:
-        break;
-    }
-    if (s_upload_cb) {
-        s_upload_cb();
-    }
-}
-
-static bool heat_read_ntc_temp(float* temp) {
-    if (!temp) {
+static bool post_cmd(const heat_cmd_t* cmd) {
+    if (!cmd || !s_rt.cmd_queue) {
         return false;
     }
-    if (bsp_ntc_read(g_ntc, temp) == BSP_OK) {
-        s_heat_data.ntc_fail_count = 0;
-        return true;
-    }
-    s_heat_data.ntc_fail_count++;
-    return false;
+    return (osMessageQueuePut(s_rt.cmd_queue, cmd, 0, 0) == osOK);
 }
 
-static void heat_pid_control(void) {
-    if (bsp_ntc_is_fault(g_ntc)) {
-        heat_stop_all();
-        s_heat_data.ntc_fail_count = 0;
-        event_publish(EVENT_NTC_FAULT, 0);
+static void apply_output(const heat_output_t* out) {
+    if (!out) {
         return;
     }
-    float curr = 0.0f;
-    if (!heat_read_ntc_temp(&curr)) {
-        if (s_heat_data.ntc_fail_count >= HEAT_NTC_FAIL_THRESHOLD) {
-            heat_stop_all();
-            s_heat_data.ntc_fail_count = 0;
+
+    /* 加热器 */
+    if (out->status == HEAT_STATUS_RUNNING) {
+        if (!s_rt.hardware_on) {
+            bsp_heat_start();
+            s_rt.hardware_on = true;
+            heat_indicator_set_heating(true);
         }
-        return;
+        if (out->power_percent != s_rt.last_power) {
+            bsp_heat_set_power(out->power_percent);
+            s_rt.last_power = out->power_percent;
+        }
+    } else {
+        /* 幂等关断 */
+        if (s_rt.hardware_on || s_rt.last_power != 0) {
+            bsp_heat_set_power(0);
+            bsp_heat_stop();
+            s_rt.hardware_on = false;
+            s_rt.last_power  = 0;
+        }
+        heat_indicator_set_heating(false);
     }
-    uint32_t now = (osKernelGetTickCount() * 1000U) / osKernelGetTickFreq();
-    uint16_t out = pid_calc_with_time(&s_heat_data.pid, curr, s_heat_data.target_temperature, now);
-    bsp_heat_set_power(g_heat, out);
-    int16_t ts = (int16_t)(curr * 10.0f + 0.5f), gs = (int16_t)(s_heat_data.target_temperature * 10.0f + 0.5f);
-    LOG_PRINTF("Temp: %d.%d Target: %d.%d PWM: %u%%\r\n", ts / 10, ts % 10, gs / 10, gs % 10, out);
+
+    /* 指示 */
+    heat_indicator_set_remain(out->remain_sec);
+
+    if (out->buzzer_beep) {
+        heat_indicator_beep(HEAT_BUZZER_BEEP_COUNT * 100U);
+    }
+
+    /* 状态变迁上报 */
+    if (out->status_changed) {
+        if (s_rt.last_status != out->status) {
+            s_rt.last_status = out->status;
+            if (s_rt.state_cb) {
+                s_rt.state_cb(out->status);
+            }
+        }
+        if (s_rt.upload_cb) {
+            s_rt.upload_cb();
+        }
+    }
 }
 
 static void heat_control_task(void* arg) {
     (void)arg;
+
     uint32_t period_ticks = CMSIS_TICKS(HEAT_CONTROL_PERIOD_MS);
-    uint32_t last         = osKernelGetTickCount();
-    pid_init(&s_heat_data.pid, HEAT_PID_KP, HEAT_PID_KI, HEAT_PID_KD, HEAT_PID_DEADBAND, HEAT_PID_OUT_MIN,
-             HEAT_PID_OUT_MAX);
-    pid_set_integral_params(&s_heat_data.pid, HEAT_PID_DEADBAND / 2, HEAT_PID_INTEGRAL_LIMIT);
-    pid_set_derivative_filter(&s_heat_data.pid, HEAT_PID_D_FILTER);
+    uint32_t last_wake    = osKernelGetTickCount();
+    uint32_t last_ms      = 0;
+
     for (;;) {
-        HeatMsg msg;
-        while (osMessageQueueGet(s_heat_data.ctrl_queue, &msg, NULL, 0) == osOK) {
-            process_heat_message(&msg);
-        }
-        HeatStatus st = HEAT_STATUS_STOP;
-        if (HEAT_LOCK()) {
-            st = s_heat_data.status;
-            HEAT_UNLOCK();
-        }
-        if (st == HEAT_STATUS_RUNNING) {
-            heat_pid_control();
+        /* 1. 采样 */
+        float temp    = 0.0f;
+        bool temp_ok  = false;
+        bool ntc_fault = bsp_ntc_is_fault();
+
+        if (ntc_fault) {
+
+            heat_cmd_t fc = {.type = HEAT_CMD_NTC_FAULT};
+            (void)post_cmd(&fc);
+        } else if (bsp_ntc_read(&temp) == BSP_OK) {
+            temp_ok = true;
         } else {
-            pid_reset(&s_heat_data.pid);
-            s_heat_data.ntc_fail_count = 0;
+            heat_cmd_t rc = {.type = HEAT_CMD_NTC_READ_FAIL};
+            (void)post_cmd(&rc);
         }
-        bsp_led_poll(g_led, HEAT_CONTROL_PERIOD_MS);
-        last += period_ticks;
-        osDelayUntil(last);
+
+        /* 2. 消费指令并计算输出 */
+        heat_output_t out;
+        memset(&out, 0, sizeof(out));
+        if (heat_control_step(last_ms, temp, temp_ok, &out)) {
+            apply_output(&out);
+        }
+
+        /* 3. 日志（关闭时整段剔除） */
+#if LOG_IS_ENABLED
+        if (temp_ok && out.status == HEAT_STATUS_RUNNING) {
+            int16_t ts = (int16_t)(temp * 10.0f + 0.5f);
+            LOG_PRINTF("Temp: %d.%d PWM: %u%%\r\n", ts / 10, ts % 10, out.power_percent);
+        }
+#endif
+
+        /* 4. 停机期间尝试解除故障锁存 */
+        if (ntc_fault) {
+            bsp_ntc_clear_fault();
+        }
+
+        /* 5. LED 闪烁 */
+        bsp_led_poll(HEAT_CONTROL_PERIOD_MS);
+
+        last_wake += period_ticks;
+        last_ms = HEAT_CONTROL_PERIOD_MS;
+        osDelayUntil(last_wake);
     }
 }
 
-static bool heat_create_resources(void) {
-    s_heat_data.mutex = osMutexNew(NULL);
-    if (!s_heat_data.mutex) {
+static bool create_resources(void) {
+    const osMessageQueueAttr_t qattr = {
+        .name      = "heat_cmd_q",
+        .cb_mem    = &s_cmd_queue_cb,
+        .cb_size   = sizeof(s_cmd_queue_cb),
+        .mq_mem    = s_cmd_queue_buf,
+        .mq_size   = sizeof(s_cmd_queue_buf),
+    };
+    s_rt.cmd_queue = osMessageQueueNew(HEAT_QUEUE_LEN, sizeof(heat_cmd_t), &qattr);
+    if (!s_rt.cmd_queue) {
         return false;
     }
-    s_heat_data.ctrl_queue = osMessageQueueNew(HEAT_QUEUE_LEN, sizeof(HeatMsg), NULL);
-    if (!s_heat_data.ctrl_queue) {
-        osMutexDelete(s_heat_data.mutex);
-        s_heat_data.mutex = NULL;
-        return false;
+
+    const osMutexAttr_t mattr = {
+        .name      = "heat_mtx",
+        .attr_bits = osMutexRecursive,
+        .cb_mem    = &s_mutex_cb,
+        .cb_size   = sizeof(s_mutex_cb),
+    };
+    s_rt.mutex = osMutexNew(&mattr);
+
+    const osTimerAttr_t tattr = {
+        .name    = "heat_tick",
+        .cb_mem  = &s_tick_timer_cb,
+        .cb_size = sizeof(s_tick_timer_cb),
+    };
+    s_rt.tick_timer = osTimerNew(tick_timer_cb, osTimerPeriodic, NULL, &tattr);
+
+    return (s_rt.mutex != NULL) && (s_rt.tick_timer != NULL);
+}
+
+static void destroy_resources(void) {
+    /* 静态对象不 Delete，仅停止并解绑 */
+    if (s_rt.tick_timer) {
+        if (osTimerIsRunning(s_rt.tick_timer)) {
+            osTimerStop(s_rt.tick_timer);
+        }
+        s_rt.tick_timer = NULL;
     }
-    s_heat_data.heating_timer = osTimerNew(heating_timer_cb, osTimerOnce, NULL, NULL);
-    if (!s_heat_data.heating_timer) {
-        osMessageQueueDelete(s_heat_data.ctrl_queue);
-        osMutexDelete(s_heat_data.mutex);
-        s_heat_data.ctrl_queue = NULL;
-        s_heat_data.mutex      = NULL;
-        return false;
-    }
-    s_heat_data.remain_timer = osTimerNew(remain_timer_cb, osTimerPeriodic, NULL, NULL);
-    if (!s_heat_data.remain_timer) {
-        osTimerDelete(s_heat_data.heating_timer);
-        osMessageQueueDelete(s_heat_data.ctrl_queue);
-        osMutexDelete(s_heat_data.mutex);
-        s_heat_data.ctrl_queue = NULL;
-        s_heat_data.mutex      = NULL;
-        return false;
-    }
-    return true;
+    s_rt.cmd_queue = NULL;
+    s_rt.mutex     = NULL;
 }
 
 bool heat_task_init(void) {
-    if (s_heat_data.mutex) {
-        return true;
+    if (s_rt.cmd_queue) {
+        return true; /* 已初始化 */
     }
-    if (!heat_create_resources()) {
+
+    if (!create_resources()) {
         return false;
     }
+
+    heat_indicator_init();
+
+    heat_control_cfg_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.pid_kp             = HEAT_PID_KP;
+    cfg.pid_ki             = HEAT_PID_KI;
+    cfg.pid_kd             = HEAT_PID_KD;
+    cfg.pid_deadband       = HEAT_PID_DEADBAND;
+    cfg.pid_out_min        = HEAT_PID_OUT_MIN;
+    cfg.pid_out_max        = HEAT_PID_OUT_MAX;
+    cfg.pid_integral_limit = HEAT_PID_INTEGRAL_LIMIT;
+    cfg.pid_d_filter       = HEAT_PID_D_FILTER;
+    cfg.max_timer_min      = HEAT_MAX_TIMER_MIN;
+    cfg.ntc_fail_threshold = HEAT_NTC_FAIL_THRESHOLD;
+    cfg.level_temp[HEAT_LEVEL_1] = 35.0f;
+    cfg.level_temp[HEAT_LEVEL_2] = 45.0f;
+    cfg.level_temp[HEAT_LEVEL_3] = 55.0f;
+    heat_control_init(&cfg);
+
     const osThreadAttr_t attr = {
-        .name = TASK_HEAT_NAME, .stack_size = TASK_HEAT_STACK, .priority = (osPriority_t)TASK_HEAT_PRIORITY};
+        .name       = TASK_HEAT_NAME,
+        .cb_mem     = &s_task_tcb,
+        .cb_size    = sizeof(s_task_tcb),
+        .stack_mem  = s_task_stack,
+        .stack_size = sizeof(s_task_stack),
+        .priority   = (osPriority_t)TASK_HEAT_PRIORITY,
+    };
     if (!osThreadNew(heat_control_task, NULL, &attr)) {
-        osTimerDelete(s_heat_data.remain_timer);
-        osTimerDelete(s_heat_data.heating_timer);
-        osMessageQueueDelete(s_heat_data.ctrl_queue);
-        osMutexDelete(s_heat_data.mutex);
-        s_heat_data.remain_timer  = NULL;
-        s_heat_data.heating_timer = NULL;
-        s_heat_data.ctrl_queue    = NULL;
-        s_heat_data.mutex         = NULL;
+        destroy_resources();
         return false;
     }
+
     return true;
 }
 
 void heat_task_deinit(void) {
-    heat_stop_all();
-    if (s_heat_data.remain_timer) {
-        osTimerDelete(s_heat_data.remain_timer);
-        s_heat_data.remain_timer = NULL;
-    }
-    if (s_heat_data.heating_timer) {
-        osTimerDelete(s_heat_data.heating_timer);
-        s_heat_data.heating_timer = NULL;
-    }
-    if (s_heat_data.ctrl_queue) {
-        osMessageQueueDelete(s_heat_data.ctrl_queue);
-        s_heat_data.ctrl_queue = NULL;
-    }
-    if (s_heat_data.mutex) {
-        osMutexDelete(s_heat_data.mutex);
-        s_heat_data.mutex = NULL;
-    }
+    /* 先关硬件再释放资源 */
+    (void)heat_status_set(HEAT_STATUS_STOP);
+    bsp_heat_set_power(0);
+    bsp_heat_stop();
+    heat_indicator_all_off();
+    destroy_resources();
+}
+
+void heat_service_set_upload_handler(heat_upload_cb_t cb) {
+    s_rt.upload_cb = cb;
+}
+
+void heat_service_set_state_handler(heat_state_cb_t cb) {
+    s_rt.state_cb = cb;
 }
 
 bool heat_status_set(HeatStatus status) {
     if (status != HEAT_STATUS_STOP && status != HEAT_STATUS_RUNNING) {
         return false;
     }
-    if (!s_heat_data.ctrl_queue) {
+    heat_cmd_t cmd = {.type = HEAT_CMD_SET_STATUS, .param.status = status};
+    if (!post_cmd(&cmd)) {
         return false;
     }
-    HeatMsg msg = {.type = MSG_SET_STATUS, .param.status = status};
-    return (osMessageQueuePut(s_heat_data.ctrl_queue, &msg, 0, 0) == osOK);
+
+    if (s_rt.tick_timer) {
+        if (status == HEAT_STATUS_RUNNING) {
+            if (!osTimerIsRunning(s_rt.tick_timer)) {
+                osTimerStart(s_rt.tick_timer, CMSIS_TICKS(1000));
+            }
+        } else {
+            if (osTimerIsRunning(s_rt.tick_timer)) {
+                osTimerStop(s_rt.tick_timer);
+            }
+        }
+    }
+    return true;
 }
 
 void heat_status_switch(void) {
-    HeatStatus st = HEAT_STATUS_STOP;
-    if (HEAT_LOCK()) {
-        st = s_heat_data.status;
-        HEAT_UNLOCK();
-    }
-    heat_status_set(st == HEAT_STATUS_RUNNING ? HEAT_STATUS_STOP : HEAT_STATUS_RUNNING);
+    heat_state_t snap;
+    heat_control_snapshot(&snap);
+    (void)heat_status_set(snap.status == HEAT_STATUS_RUNNING ? HEAT_STATUS_STOP : HEAT_STATUS_RUNNING);
 }
 
 bool heat_level_set(HeatLevel level) {
     if (level > HEAT_LEVEL_MAX) {
         return false;
     }
-    if (!s_heat_data.ctrl_queue) {
-        return false;
-    }
-    HeatMsg msg = {.type = MSG_SET_LEVEL, .param.level = level};
-    return (osMessageQueuePut(s_heat_data.ctrl_queue, &msg, 0, 0) == osOK);
+    heat_cmd_t cmd = {.type = HEAT_CMD_SET_LEVEL, .param.level = level};
+    return post_cmd(&cmd);
 }
 
 void heat_level_up(void) {
-    HeatLevel lv = HEAT_LEVEL_1;
-    if (HEAT_LOCK()) {
-        lv = (s_heat_data.level < HEAT_LEVEL_MAX) ? (s_heat_data.level + 1) : HEAT_LEVEL_MAX;
-        HEAT_UNLOCK();
+    heat_state_t snap;
+    heat_control_snapshot(&snap);
+    HeatLevel lv = (snap.level < HEAT_LEVEL_MAX) ? (HeatLevel)(snap.level + 1) : HEAT_LEVEL_MAX;
+    if (lv == HEAT_LEVEL_MAX && snap.level == HEAT_LEVEL_MAX) {
+        heat_indicator_beep(HEAT_BUZZER_BEEP_COUNT * 100U);
     }
-    if (lv == HEAT_LEVEL_MAX) {
-        buzzer_beep_local(HEAT_BUZZER_BEEP_COUNT);
-    }
-    heat_level_set(lv);
+    (void)heat_level_set(lv);
 }
 
 void heat_level_down(void) {
-    HeatLevel lv = HEAT_LEVEL_MAX;
-    if (HEAT_LOCK()) {
-        lv = (s_heat_data.level > HEAT_LEVEL_1) ? (s_heat_data.level - 1) : HEAT_LEVEL_1;
-        HEAT_UNLOCK();
+    heat_state_t snap;
+    heat_control_snapshot(&snap);
+    HeatLevel lv = (snap.level > HEAT_LEVEL_1) ? (HeatLevel)(snap.level - 1) : HEAT_LEVEL_1;
+    if (lv == HEAT_LEVEL_1 && snap.level == HEAT_LEVEL_1) {
+        heat_indicator_beep(HEAT_BUZZER_BEEP_COUNT * 100U);
     }
-    if (lv == HEAT_LEVEL_1) {
-        buzzer_beep_local(HEAT_BUZZER_BEEP_COUNT);
-    }
-    heat_level_set(lv);
+    (void)heat_level_set(lv);
 }
 
 bool heat_timer_set(uint16_t minute) {
     if (minute > HEAT_MAX_TIMER_MIN) {
         return false;
     }
-    if (!s_heat_data.ctrl_queue) {
-        return false;
-    }
-    HeatMsg msg = {.type = MSG_SET_TIMER, .param.minute = minute};
-    return (osMessageQueuePut(s_heat_data.ctrl_queue, &msg, 0, 0) == osOK);
+    heat_cmd_t cmd = {.type = HEAT_CMD_SET_TIMER, .param.minute = minute};
+    return post_cmd(&cmd);
 }
 
 HeatStatus heat_status_get(void) {
-    HeatStatus st = HEAT_STATUS_STOP;
-    if (HEAT_LOCK()) {
-        st = s_heat_data.status;
-        HEAT_UNLOCK();
-    }
-    return st;
+    heat_state_t snap;
+    heat_control_snapshot(&snap);
+    return snap.status;
 }
+
 HeatLevel heat_level_get(void) {
-    HeatLevel lv = HEAT_LEVEL_1;
-    if (HEAT_LOCK()) {
-        lv = s_heat_data.level;
-        HEAT_UNLOCK();
-    }
-    return lv;
+    heat_state_t snap;
+    heat_control_snapshot(&snap);
+    return snap.level;
 }
+
 uint16_t heat_remain_time_get(void) {
-    uint16_t m = 0;
-    if (HEAT_LOCK()) {
-        m = s_heat_data.remain_sec / 60;
-        HEAT_UNLOCK();
-    }
-    return m;
+    heat_state_t snap;
+    heat_control_snapshot(&snap);
+    return (uint16_t)(snap.remain_sec / 60U);
 }

@@ -1,0 +1,4 @@
+#ifndef APP_CONFIG_SHIM_H
+#define APP_CONFIG_SHIM_H
+#define MODBUS_SLAVE_ADDR 0x01
+#endif

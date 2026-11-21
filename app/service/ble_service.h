@@ -7,16 +7,8 @@
 #define BLE_SERVICE_H
 
 #include <stdbool.h>
-#include <stdint.h>
 #include <stddef.h>
-
-#ifndef __cplusplus
-#ifndef bool
-#define bool _Bool
-#define true 1
-#define false 0
-#endif
-#endif
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,6 +28,13 @@ typedef enum {
 typedef void (*ble_frame_cb_t)(const uint8_t* data, uint16_t len, bool is_modbus);
 
 void ble_service_init(void);
+
+/**
+ * @brief 处理一帧 AT 命令（含 LED 动作执行）
+ * @note  由 app_main 的帧分发回调调用；解析在 at_parser（纯逻辑），
+ *        执行在本模块（允许操作 BSP），保持 protocol 层零硬件依赖。
+ */
+void ble_handle_at_frame(const uint8_t* data, uint16_t len);
 void ble_service_set_frame_handler(ble_frame_cb_t cb);
 void bt_start(void);
 void ble_mode(bt_mode_t mode);

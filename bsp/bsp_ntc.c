@@ -1,14 +1,11 @@
 /**
- * @file    bsp_ntc.c
- * @brief   NTC 温度传感器驱动实现（静态分配，查表 + DMA + 滤波）
- * @version 2.1
+ * @file bsp_ntc.c
+ * @brief NTC 温度传感器驱动
+ *
+ * 滤波链：中值滤波 → 滑动平均 → 低通。
  */
 
 #include "bsp_ntc.h"
-
-/*==============================================================================
- * 内部常量
- *============================================================================*/
 
 #define ADC_MAX_VALUE 4095
 #define ADC_DMA_BUF_SIZE 16
@@ -16,7 +13,7 @@
 #define TEMP_MAX_VALID 100.0f
 #define STUCK_THRESHOLD 10
 
-/* 查表数据 — Flash 驻留 */
+/* 查表数据，驻留 Flash */
 static const uint16_t ntc_adc_table[] = {
     3996, 3988, 3981, 3972, 3964, 3955, 3945, 3935, 3924, 3912, 3900, 3887, 3874, 3860, 3845, 3830, 3813, 3796,
     3778, 3760, 3740, 3720, 3698, 3676, 3653, 3629, 3604, 3578, 3551, 3524, 3495, 3465, 3435, 3403, 3371, 3337,
@@ -38,10 +35,6 @@ static const int8_t ntc_temp_table[] = {
     98,  99,  100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120};
 #define NTC_TABLE_SIZE BSP_ARRAY_SIZE(ntc_adc_table)
 
-/*==============================================================================
- * 内部结构体（静态单例）
- *============================================================================*/
-
 struct bsp_ntc_s {
     ADC_HandleTypeDef* hadc;
     float temp_offset;
@@ -55,14 +48,19 @@ struct bsp_ntc_s {
     uint32_t last_raw_adc;
     uint8_t stuck_counter;
     bool fault_active;
+    /* 卡死检测滑窗 */
+    uint32_t range_win[8];
+    uint8_t range_idx;
+    bool range_win_full;
     /* DMA */
 #if NTC_USE_DMA
 #if USE_DOUBLE_BUFFER
-    uint32_t dma_buf[2][ADC_DMA_BUF_SIZE];
+    /* 须与 DMA_MDATAALIGN_HALFWORD 一致 */
+    uint16_t dma_buf[2][ADC_DMA_BUF_SIZE];
     volatile uint8_t active_buf;
     volatile uint8_t data_ready;
 #else
-    uint32_t dma_buf[ADC_DMA_BUF_SIZE];
+    uint16_t dma_buf[ADC_DMA_BUF_SIZE];
 #endif
 #endif
     bool initialized;
@@ -72,16 +70,12 @@ static struct bsp_ntc_s s_inst;
 static bool s_inited = false;
 
 #if NTC_USE_DMA && USE_DOUBLE_BUFFER
-bsp_ntc_t* g_ntc_instance = NULL;
+static struct bsp_ntc_s* g_ntc_instance = NULL;
 #endif
-
-/*==============================================================================
- * 内部 — 中值滤波
- *============================================================================*/
 
 static uint32_t ntc_median(uint32_t buf[], uint8_t n) {
     uint32_t tmp[NTC_FILTER_SAMPLES];
-    /* 手工拷贝代替 memcpy（省 ROM） */
+
     for (uint8_t i = 0; i < n; i++) {
         tmp[i] = buf[i];
     }
@@ -102,10 +96,6 @@ static uint32_t ntc_median(uint32_t buf[], uint8_t n) {
     return tmp[n / 2];
 }
 
-/*==============================================================================
- * 内部 — 滑动平均
- *============================================================================*/
-
 static uint32_t ntc_moving_avg(uint32_t new_val) {
     s_inst.moving_sum -= s_inst.adc_moving_buf[s_inst.moving_idx];
     s_inst.moving_sum += new_val;
@@ -121,10 +111,6 @@ static uint32_t ntc_moving_avg(uint32_t new_val) {
     return s_inst.moving_sum / NTC_MOVING_AVG_LEN;
 #endif
 }
-
-/*==============================================================================
- * 内部 — 插值查表
- *============================================================================*/
 
 static float ntc_interpolate(uint32_t adc) {
     static uint8_t last_idx = 0;
@@ -154,19 +140,12 @@ static float ntc_interpolate(uint32_t adc) {
     return (float)ntc_temp_table[i] + ratio * (float)(ntc_temp_table[i + 1] - ntc_temp_table[i]);
 }
 
-/*==============================================================================
- * 内部 — 低通滤波
- *============================================================================*/
-
 static float ntc_low_pass(float new_val, float last_val) {
     return NTC_LOW_PASS_ALPHA * new_val + (1.0f - NTC_LOW_PASS_ALPHA) * last_val;
 }
 
-/*==============================================================================
- * 内部 — 故障检测
- *============================================================================*/
-
 static bool ntc_detect_fault(uint32_t adc_val) {
+    /* 开路 / 短路 */
     if (adc_val >= ADC_MAX_VALUE - 10) {
         s_inst.fault_active = true;
         return true;
@@ -175,22 +154,39 @@ static bool ntc_detect_fault(uint32_t adc_val) {
         s_inst.fault_active = true;
         return true;
     }
-    if (adc_val == s_inst.last_raw_adc) {
-        if (++s_inst.stuck_counter >= STUCK_THRESHOLD) {
-            s_inst.fault_active = true;
-            return true;
-        }
-    } else {
-        s_inst.stuck_counter = 0;
-        s_inst.last_raw_adc  = adc_val;
+
+    /* 卡死：8 点滑窗极差持续 <=1 LSB 且累计达阈值。
+     * 用极差而非"值相同"，避免温度进入死区后读数稳定被误判。 */
+    s_inst.range_win[s_inst.range_idx] = adc_val;
+    s_inst.range_idx                   = (uint8_t)((s_inst.range_idx + 1U) & 7U);
+    if (s_inst.range_idx == 0U) {
+        s_inst.range_win_full = true;
     }
+
+    if (s_inst.range_win_full) {
+        uint32_t mn = 0xFFFFFFFFU;
+        uint32_t mx = 0U;
+        for (uint8_t i = 0; i < 8; i++) {
+            if (s_inst.range_win[i] < mn) {
+                mn = s_inst.range_win[i];
+            }
+            if (s_inst.range_win[i] > mx) {
+                mx = s_inst.range_win[i];
+            }
+        }
+        if ((mx - mn) <= 1U) {
+            if (++s_inst.stuck_counter >= STUCK_THRESHOLD) {
+                s_inst.fault_active = true;
+                return true;
+            }
+        } else {
+            s_inst.stuck_counter = 0;
+        }
+    }
+
     s_inst.fault_active = false;
     return false;
 }
-
-/*==============================================================================
- * DMA ISR 回调
- *============================================================================*/
 
 #if NTC_USE_DMA && USE_DOUBLE_BUFFER
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
@@ -207,30 +203,36 @@ static int ntc_dma_extract(uint32_t* dest, uint8_t n) {
     if (!s_inst.data_ready) {
         return -1;
     }
+    /* 取上一次完整写入的整块，从头部读取 n 个样本 */
     uint8_t ready_buf = s_inst.active_buf ^ 1;
+    if (n > ADC_DMA_BUF_SIZE) {
+        n = ADC_DMA_BUF_SIZE;
+    }
+    uint32_t primask = __get_PRIMASK();
     __disable_irq();
     for (uint8_t i = 0; i < n; i++) {
-        dest[i] = s_inst.dma_buf[ready_buf][(ADC_DMA_BUF_SIZE - n + i) & (ADC_DMA_BUF_SIZE - 1)];
+        dest[i] = s_inst.dma_buf[ready_buf][i];
     }
     s_inst.data_ready = 0;
-    __enable_irq();
+    __set_PRIMASK(primask);
     return 0;
 }
 #elif NTC_USE_DMA
 static int ntc_dma_extract(uint32_t* dest, uint8_t n) {
+    if (n > ADC_DMA_BUF_SIZE) {
+        n = ADC_DMA_BUF_SIZE;
+    }
+    uint32_t primask = __get_PRIMASK();
     __disable_irq();
     HAL_ADC_Stop_DMA(s_inst.hadc);
-    for (uint8_t i = 0; i < n; i++)
-        dest[i] = s_inst.dma_buf[(ADC_DMA_BUF_SIZE - n + i) % ADC_DMA_BUF_SIZE];
-    HAL_ADC_Start_DMA(s_inst.hadc, s_inst.dma_buf, ADC_DMA_BUF_SIZE);
-    __enable_irq();
+    for (uint8_t i = 0; i < n; i++) {
+        dest[i] = s_inst.dma_buf[i];
+    }
+    HAL_ADC_Start_DMA(s_inst.hadc, (uint32_t*)s_inst.dma_buf, ADC_DMA_BUF_SIZE);
+    __set_PRIMASK(primask);
     return 0;
 }
 #endif
-
-/*==============================================================================
- * 内部 — 采样 + 滤波
- *============================================================================*/
 
 static int ntc_sample(uint32_t* adc_out) {
     uint32_t raw[NTC_FILTER_SAMPLES];
@@ -240,26 +242,31 @@ static int ntc_sample(uint32_t* adc_out) {
         return -1;
     }
 #else
-    HAL_ADC_Start(s_inst.hadc);
+    /* 单次转换模式下 EOC 在读取 DR 后由硬件清除，每次采样必须重新启动转换 */
     for (uint8_t i = 0; i < NTC_FILTER_SAMPLES; i++) {
-        raw[i] =
-            (HAL_ADC_PollForConversion(s_inst.hadc, 2) == HAL_OK) ? HAL_ADC_GetValue(s_inst.hadc) : ADC_MAX_VALUE / 2;
+        if (HAL_ADC_Start(s_inst.hadc) != HAL_OK) {
+            HAL_ADC_Stop(s_inst.hadc);
+            *adc_out = ADC_MAX_VALUE / 2;
+            return -1;
+        }
+        if (HAL_ADC_PollForConversion(s_inst.hadc, 2) != HAL_OK) {
+            HAL_ADC_Stop(s_inst.hadc);
+            *adc_out = ADC_MAX_VALUE / 2;
+            return -1; /* 转换失败不能当作有效样本 */
+        }
+        raw[i] = HAL_ADC_GetValue(s_inst.hadc);
+        HAL_ADC_Stop(s_inst.hadc);
     }
-    HAL_ADC_Stop(s_inst.hadc);
 #endif
     *adc_out = ntc_moving_avg(ntc_median(raw, NTC_FILTER_SAMPLES));
     return 0;
 }
 
-/*==============================================================================
- * 公共 API
- *============================================================================*/
-
-bsp_status_t bsp_ntc_init(bsp_ntc_t** handle, const bsp_ntc_config_t* config) {
-    if (!handle || !config || !config->hadc) {
+bsp_status_t bsp_ntc_init(const bsp_ntc_config_t* config) {
+    if (!config || !config->hadc) {
         return BSP_ERR_PARAM;
     }
-    if (*handle || s_inited) {
+    if (s_inited) {
         return BSP_ERR_BUSY;
     }
 
@@ -274,12 +281,18 @@ bsp_status_t bsp_ntc_init(bsp_ntc_t** handle, const bsp_ntc_config_t* config) {
     s_inst.is_first_sample    = true;
     s_inst.fault_active       = false;
     s_inst.stuck_counter      = 0;
+    s_inst.last_raw_adc       = 0;
+    s_inst.range_idx          = 0;
+    s_inst.range_win_full     = false;
+    for (uint8_t i = 0; i < 8; i++) {
+        s_inst.range_win[i] = ADC_MAX_VALUE / 2;
+    }
 
 #if NTC_USE_DMA
 #if USE_DOUBLE_BUFFER
     for (uint8_t i = 0; i < 2; i++) {
         for (uint8_t j = 0; j < ADC_DMA_BUF_SIZE; j++) {
-            s_inst.dma_buf[i][j] = ADC_MAX_VALUE / 2;
+            s_inst.dma_buf[i][j] = (uint16_t)(ADC_MAX_VALUE / 2);
         }
     }
     s_inst.active_buf = 0;
@@ -287,20 +300,20 @@ bsp_status_t bsp_ntc_init(bsp_ntc_t** handle, const bsp_ntc_config_t* config) {
     g_ntc_instance    = &s_inst;
     HAL_ADC_Start_DMA(s_inst.hadc, (uint32_t*)s_inst.dma_buf[0], ADC_DMA_BUF_SIZE);
 #else
-    for (uint8_t i = 0; i < ADC_DMA_BUF_SIZE; i++)
-        s_inst.dma_buf[i] = ADC_MAX_VALUE / 2;
-    HAL_ADC_Start_DMA(s_inst.hadc, s_inst.dma_buf, ADC_DMA_BUF_SIZE);
+    for (uint8_t i = 0; i < ADC_DMA_BUF_SIZE; i++) {
+        s_inst.dma_buf[i] = (uint16_t)(ADC_MAX_VALUE / 2);
+    }
+    HAL_ADC_Start_DMA(s_inst.hadc, (uint32_t*)s_inst.dma_buf, ADC_DMA_BUF_SIZE);
 #endif
 #endif
 
     s_inst.initialized = true;
     s_inited           = true;
-    *handle            = (bsp_ntc_t*)&s_inst;
     return BSP_OK;
 }
 
-void bsp_ntc_deinit(bsp_ntc_t** handle) {
-    if (!handle || !*handle || !s_inited) {
+void bsp_ntc_deinit(void) {
+    if (!s_inited) {
         return;
     }
 #if NTC_USE_DMA
@@ -313,11 +326,10 @@ void bsp_ntc_deinit(bsp_ntc_t** handle) {
 #endif
     s_inst.initialized = false;
     s_inited           = false;
-    *handle            = NULL;
 }
 
-bsp_status_t bsp_ntc_read(bsp_ntc_t* handle, float* temp_c) {
-    if (!handle || !s_inited) {
+bsp_status_t bsp_ntc_read(float* temp_c) {
+    if (!s_inited) {
         return BSP_ERR_NOTINIT;
     }
     if (!temp_c) {
@@ -348,7 +360,8 @@ bsp_status_t bsp_ntc_read(bsp_ntc_t* handle, float* temp_c) {
         s_inst.last_filtered_temp = filtered;
     }
 
-    if (filtered <= TEMP_MIN_VALID || filtered >= TEMP_MAX_VALID) {
+    /* 严格不等号：量程端点是合法值 */
+    if (filtered < TEMP_MIN_VALID || filtered > TEMP_MAX_VALID) {
         *temp_c = s_inst.last_filtered_temp;
         return BSP_ERR_HW;
     }
@@ -356,8 +369,8 @@ bsp_status_t bsp_ntc_read(bsp_ntc_t* handle, float* temp_c) {
     return BSP_OK;
 }
 
-bsp_status_t bsp_ntc_get_adc(bsp_ntc_t* handle, uint32_t* adc_val) {
-    if (!handle || !s_inited) {
+bsp_status_t bsp_ntc_get_adc(uint32_t* adc_val) {
+    if (!s_inited) {
         return BSP_ERR_NOTINIT;
     }
     if (!adc_val) {
@@ -366,26 +379,26 @@ bsp_status_t bsp_ntc_get_adc(bsp_ntc_t* handle, uint32_t* adc_val) {
     return (ntc_sample(adc_val) == 0) ? BSP_OK : BSP_ERROR;
 }
 
-bool bsp_ntc_is_fault(bsp_ntc_t* handle) {
-    return (handle && s_inited) ? s_inst.fault_active : false;
+bool bsp_ntc_is_fault(void) {
+    return s_inited ? s_inst.fault_active : false;
 }
 
-void bsp_ntc_clear_fault(bsp_ntc_t* handle) {
-    if (!handle || !s_inited) {
+void bsp_ntc_clear_fault(void) {
+    if (!s_inited) {
         return;
     }
     s_inst.fault_active  = false;
     s_inst.stuck_counter = 0;
 }
 
-void bsp_ntc_set_offset(bsp_ntc_t* handle, float offset) {
-    if (handle && s_inited) {
+void bsp_ntc_set_offset(float offset) {
+    if (s_inited) {
         s_inst.temp_offset = offset;
     }
 }
 
-void bsp_ntc_reset_filter(bsp_ntc_t* handle) {
-    if (!handle || !s_inited) {
+void bsp_ntc_reset_filter(void) {
+    if (!s_inited) {
         return;
     }
     s_inst.last_filtered_temp = 25.0f;
